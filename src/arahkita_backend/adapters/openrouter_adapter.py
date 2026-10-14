@@ -2,12 +2,22 @@ import logging
 from openai import AsyncOpenAI
 
 from arahkita_backend.config.settings import Settings
+from arahkita_backend.schemas.essay_eval import (
+    EssayEvaluationLLMResponse,
+    EssayEvaluationRequest,
+    EssayEvaluationResult,
+)
 from arahkita_backend.schemas.input import InputKeminatan
 from arahkita_backend.schemas.major_node import MajorRecommendationLLMResponse
+from arahkita_backend.schemas.minicase_node import (
+    GenerateMinicasesRequest,
+    MinicasesGenerationLLMResponse,
+    SubjectTrialLLMItem,
+)
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """Kamu adalah konsultan peminatan jurusan kuliah untuk siswa SMA/SMK di Indonesia.
+MAJOR_RECOMMENDATION_SYSTEM_PROMPT = """Kamu adalah konsultan peminatan jurusan kuliah untuk siswa SMA/SMK di Indonesia.
 Tugasmu adalah menganalisis minat dan nilai mata pelajaran siswa, lalu merekomendasikan antara 2 hingga 6 nama jurusan kuliah yang paling relevan dan realistis.
 
 Aturan Wajib:
@@ -16,6 +26,65 @@ Aturan Wajib:
 2. Berikan minimal 2 dan maksimal 6 rekomendasi nama jurusan.
 3. Gunakan nama jurusan resmi dalam bahasa Indonesia yang lazim di perguruan tinggi (misal: "Teknik Informatika", "Sistem Informasi", "Teknik Elektro").
 4. Jangan sertakan teks penjelasan, markdown formatting tambahan, ataupun basa-basi di luar format JSON tersebut.
+"""
+
+MINICASES_SYSTEM_PROMPT = """Kamu adalah perancang kurikulum dan studi kasus interaktif untuk siswa SMA/SMK yang ingin mengeksplorasi jurusan kuliah di Indonesia.
+Tugasmu adalah menganalisis suatu jurusan kuliah dan memilih antara 3 hingga 5 mata kuliah dasar (basic/pengantar) yang paling esensial dan representatif di jurusan tersebut.
+
+Untuk setiap mata kuliah dasar yang dipilih, buat TEPAT 2 studi kasus/trial interaktif:
+1. Pilihan Ganda (MCQ):
+   - minicase_title: Judul interaktif yang relevan dengan topik (maksimal 2 kata, misal "Logika Coding", "Audit Akun", "Diagnosa Awal").
+   - question: Studi kasus atau pertanyaan aplikatif pengantar konsep dasar mata kuliah tersebut.
+   - options: Tepat 4 pilihan jawaban yang masuk akal dan jelas perbedaannya.
+   - correct_answer: Kunci jawaban yang benar (harus persis sama dengan salah satu opsi di dalam options).
+2. Esai Reflektif:
+   - minicase_title: Judul interaktif yang relevan dengan topik (maksimal 2 kata).
+   - question: Skenario tantangan, dilema, atau situasi dunia nyata yang menuntut penalaran problem-solving atau resiliensi siswa.
+   - evaluation_hint: Kriteria atau indikator singkat yang membedakan jawaban berkualitas tinggi (berpikir analitis, kompromi, inisiatif) dengan jawaban rendah (pasrah, asal-asalan).
+
+Aturan Wajib:
+1. Kembalikan HANYA format JSON valid dengan struktur:
+{
+  "subjects": [
+    {
+      "subject_name": "Nama Mata Kuliah",
+      "mcq": {
+        "minicase_title": "Judul Maks2Kata",
+        "question": "...",
+        "options": ["Opsi A", "Opsi B", "Opsi C", "Opsi D"],
+        "correct_answer": "Opsi A"
+      },
+      "essay": {
+        "minicase_title": "Judul Maks2Kata",
+        "question": "...",
+        "evaluation_hint": "..."
+      }
+    }
+  ]
+}
+2. Jumlah subjects harus minimal 3 dan maksimal 5 (menghasilkan total 6 hingga 10 studi kasus).
+3. Gunakan bahasa Indonesia yang komunikatif, menarik, dan mudah dipahami siswa SMA/SMK.
+4. Jangan sertakan teks markdown atau penjelasan di luar format JSON.
+"""
+
+ESSAY_EVALUATION_SYSTEM_PROMPT = """Kamu adalah evaluator psikometrik dan peminatan jurusan yang menilai respon esai reflektif siswa SMA/SMK.
+Kamu akan menerima:
+- Pertanyaan (studi kasus)
+- Pedoman Penilaian (evaluation_hint)
+- Jawaban Siswa (user_answer)
+
+Tugasmu adalah menilai jawaban siswa secara objektif ke dalam 3 dimensi spesifik:
+1. analytical_fit (Skor integer 1–5):
+   Apakah cara siswa merespons masalah masuk akal, logis, dan sejalan dengan kriteria di evaluation_hint?
+2. interest_signal (Skor integer 1–5):
+   Apakah nada emosional siswa menunjukkan antusiasme, rasa ingin tahu, atau ketertarikan terhadap tantangan tersebut?
+3. is_serious_attempt (boolean True / False):
+   Guardrail validasi input. True jika siswa benar-benar berusaha merespons studi kasus. False jika siswa hanya mengetik karakter acak (seperti "asdfgh"), mengetik penolakan/ketidakniatan (seperti "gak tau", "malas", "lanjut aja", "apa ya"), atau jawaban yang sama sekali tidak berhubungan dengan konteks studi kasus.
+
+Aturan Wajib & Penalti:
+- JIKA is_serious_attempt == False, MAKA skor analytical_fit WAJIB bernilai 1 dan interest_signal WAJIB bernilai 1.
+- Kembalikan HANYA format JSON valid berikut tanpa teks lain:
+{"analytical_fit": 4, "interest_signal": 5, "is_serious_attempt": true}
 """
 
 
@@ -28,6 +97,34 @@ def format_user_prompt(profile: InputKeminatan) -> str:
         f"- Nilai IPA: {profile.nilai.IPA}\n"
         f"- Nilai Bahasa Inggris: {profile.nilai.Bahasa_Inggris}\n\n"
         f"Berikan 2 hingga 6 rekomendasi nama jurusan kuliah dalam format JSON."
+    )
+
+
+def format_minicases_user_prompt(
+    major_name: str, profile: InputKeminatan | None = None
+) -> str:
+    """Memformat prompt untuk generasi minicases mata kuliah dasar."""
+    prompt = f"Jurusan yang dieksplorasi: {major_name}\n"
+    if profile is not None:
+        prompt += (
+            f"Konteks Profil Siswa:\n"
+            f"- Minat: {profile.minat}\n"
+            f"- Nilai Matematika: {profile.nilai.Matematika}\n"
+            f"- Nilai IPA: {profile.nilai.IPA}\n"
+            f"- Nilai Bahasa Inggris: {profile.nilai.Bahasa_Inggris}\n"
+        )
+    prompt += "Rancang 3 hingga 5 mata kuliah dasar beserta studi kasus pilihan ganda dan esai reflektif dalam format JSON."
+    return prompt
+
+
+def format_essay_eval_user_prompt(
+    question: str, evaluation_hint: str, user_answer: str
+) -> str:
+    """Memformat prompt evaluasi esai dengan rubric injection (tanpa menyertakan ID)."""
+    return (
+        f"Pertanyaan Studi Kasus:\n{question}\n\n"
+        f"Pedoman Penilaian:\n{evaluation_hint}\n\n"
+        f"Jawaban Siswa:\n{user_answer}"
     )
 
 
@@ -59,11 +156,11 @@ async def fetch_major_recommendations(
     response = await ai_client.chat.completions.create(
         model=settings.openrouter_model,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": MAJOR_RECOMMENDATION_SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
         ],
         response_format={"type": "json_object"},
-        max_tokens=500,
+        max_tokens=1000,
         extra_body={"reasoning": {"exclude": True}},
     )
 
@@ -80,9 +177,108 @@ async def fetch_major_recommendations(
         raise ValueError(f"Gagal mem-parsing rekomendasi jurusan dari LLM: {exc}") from exc
 
     recommendations = [r.strip() for r in parsed.recommendations if r and r.strip()]
-
-    # Batasi maksimal 6 item sesuai spesifikasi
     return recommendations[:6]
+
+
+async def fetch_minicases_generation(
+    request: GenerateMinicasesRequest,
+    settings: Settings,
+    client: AsyncOpenAI | None = None,
+) -> list[SubjectTrialLLMItem]:
+    """Mengirim request ke OpenRouter untuk men-generate 3–5 mata kuliah dasar beserta studi kasus."""
+    ai_client = client or AsyncOpenAI(
+        base_url=settings.openrouter_base_url,
+        api_key=settings.openrouter_api_key,
+    )
+
+    user_content = format_minicases_user_prompt(
+        major_name=request.major_name,
+        profile=request.profile,
+    )
+
+    response = await ai_client.chat.completions.create(
+        model=settings.openrouter_model,
+        messages=[
+            {"role": "system", "content": MINICASES_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        response_format={"type": "json_object"},
+        max_tokens=3500,
+        extra_body={"reasoning": {"exclude": True}},
+    )
+
+    raw_content = response.choices[0].message.content
+    if not raw_content:
+        raise ValueError("OpenRouter mengembalikan respons kosong saat men-generate minicases.")
+
+    cleaned_json = clean_json_response(raw_content)
+
+    try:
+        parsed = MinicasesGenerationLLMResponse.model_validate_json(cleaned_json)
+    except Exception as exc:
+        logger.error("Gagal melakukan parsing output LLM minicases: %s. Raw: %s", exc, raw_content)
+        raise ValueError(f"Gagal mem-parsing minicases dari LLM: {exc}") from exc
+
+    if not parsed.subjects:
+        raise ValueError("LLM tidak menghasilkan subjek mata kuliah trial.")
+
+    # Batasi minimal 1 dan maksimal 5 mata kuliah (total 2 s.d. 10 node)
+    return parsed.subjects[:5]
+
+
+async def evaluate_essay_answer(
+    request: EssayEvaluationRequest,
+    settings: Settings,
+    client: AsyncOpenAI | None = None,
+) -> EssayEvaluationResult:
+    """Mengirim prompt evaluasi esai real-time ke OpenRouter dengan rubric injection."""
+    ai_client = client or AsyncOpenAI(
+        base_url=settings.openrouter_base_url,
+        api_key=settings.openrouter_api_key,
+    )
+
+    user_content = format_essay_eval_user_prompt(
+        question=request.question,
+        evaluation_hint=request.evaluation_hint,
+        user_answer=request.user_answer,
+    )
+
+    response = await ai_client.chat.completions.create(
+        model=settings.openrouter_model,
+        messages=[
+            {"role": "system", "content": ESSAY_EVALUATION_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        response_format={"type": "json_object"},
+        max_tokens=1500,
+        extra_body={"reasoning": {"exclude": True}},
+    )
+
+    raw_content = response.choices[0].message.content
+    if not raw_content:
+        raise ValueError("OpenRouter mengembalikan respons kosong saat mengevaluasi esai.")
+
+    cleaned_json = clean_json_response(raw_content)
+
+    try:
+        parsed = EssayEvaluationLLMResponse.model_validate_json(cleaned_json)
+    except Exception as exc:
+        logger.error("Gagal melakukan parsing output LLM evaluasi esai: %s. Raw: %s", exc, raw_content)
+        raise ValueError(f"Gagal mem-parsing evaluasi esai dari LLM: {exc}") from exc
+
+    # Penerapan guardrail deterministik: jika percobaan tidak serius, penalti nilai ke 1
+    if not parsed.is_serious_attempt:
+        return EssayEvaluationResult(
+            analytical_fit=1,
+            interest_signal=1,
+            is_serious_attempt=False,
+        )
+
+    return EssayEvaluationResult(
+        analytical_fit=parsed.analytical_fit,
+        interest_signal=parsed.interest_signal,
+        is_serious_attempt=True,
+    )
 
 
 class OpenRouterAdapter:
@@ -99,6 +295,26 @@ class OpenRouterAdapter:
         """Mengambil rekomendasi jurusan menggunakan konfigurasi client adapter."""
         return await fetch_major_recommendations(
             profile=profile,
+            settings=self.settings,
+            client=self.client,
+        )
+
+    async def fetch_minicases_generation(
+        self, request: GenerateMinicasesRequest
+    ) -> list[SubjectTrialLLMItem]:
+        """Mengambil hasil generasi mata kuliah dan minicases trial."""
+        return await fetch_minicases_generation(
+            request=request,
+            settings=self.settings,
+            client=self.client,
+        )
+
+    async def evaluate_essay_answer(
+        self, request: EssayEvaluationRequest
+    ) -> EssayEvaluationResult:
+        """Mengevaluasi jawaban esai reflektif siswa secara real-time."""
+        return await evaluate_essay_answer(
+            request=request,
             settings=self.settings,
             client=self.client,
         )
