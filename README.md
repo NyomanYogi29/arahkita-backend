@@ -86,7 +86,7 @@ credentials-file: /home/USERNAME/.cloudflared/UUID-TUNNEL.json
 
 ingress:
   # Rute domain publik ke backend FastAPI lokal
-  - hostname: api.domainanda.com
+  - hostname: api.nyomanyogi.my.id
     service: http://localhost:8000
   # Catch-all rule (wajib ada di baris terakhir)
   - service: http_status:404
@@ -94,7 +94,7 @@ ingress:
 
 ### 5. Hubungkan Subdomain DNS ke Tunnel
 ```bash
-cloudflared tunnel route dns arahkita-tunnel api.domainanda.com
+cloudflared tunnel route dns arahkita-tunnel api.nyomanyogi.my.id
 ```
 
 ### 6. Jalankan Cloudflare Tunnel sebagai System Service (Otomatis Aktif Saat Boot)
@@ -103,15 +103,18 @@ sudo cloudflared service install
 sudo systemctl enable cloudflared
 sudo systemctl start cloudflared
 ```
-Sekarang backend Anda dapat diakses secara publik dan aman via HTTPS di `https://api.domainanda.com`!
+Sekarang backend Anda aktif secara publik dan aman via HTTPS di `https://api.nyomanyogi.my.id`!
 
 ---
 
 ## 📡 Dokumentasi Endpoint API
 
-- **Interactive Swagger UI**: `http://localhost:8000/docs`
-- **ReDoc**: `http://localhost:8000/redoc`
-- **Health Check**: `GET /health`
+Panduan integrasi lengkap untuk frontend (React + Vite, JavaScript) dapat dilihat di file **[`api_docs.md`](api_docs.md)**.
+
+- **Live Production URL**: `https://api.nyomanyogi.my.id/api/v1`
+- **Interactive Swagger UI**: `https://api.nyomanyogi.my.id/docs` (atau lokal `http://localhost:8000/docs`)
+- **ReDoc**: `https://api.nyomanyogi.my.id/redoc` (atau lokal `http://localhost:8000/redoc`)
+- **Health Check**: `GET https://api.nyomanyogi.my.id/health`
 
 ### `POST /api/v1/majors/recommend`
 

@@ -104,7 +104,7 @@ class TestMinicaseService(unittest.IsolatedAsyncioTestCase):
 
         # Verifikasi rantai pointer dan atribut
         for idx, node in enumerate(nodes):
-            self.assertEqual(node.minicase_number, idx + 1)
+            self.assertEqual(node.minicase_number, idx + 2)
             self.assertEqual(node.parent_id, major_id)
             self.assertEqual(node.circle_color, circle_color)
             self.assertFalse(node.is_done)

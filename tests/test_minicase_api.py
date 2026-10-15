@@ -47,6 +47,8 @@ class TestMinicaseAPI(unittest.IsolatedAsyncioTestCase):
         response = await generate_minicases(payload=payload, adapter=self.mock_adapter)
 
         self.assertEqual(len(response), 2)
+        self.assertEqual(response[0].minicase_number, 2)
+        self.assertEqual(response[1].minicase_number, 3)
         self.assertEqual(response[0].parent_id, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         self.assertEqual(response[0].child_id, response[1].id)
         self.assertIsNone(response[1].child_id)

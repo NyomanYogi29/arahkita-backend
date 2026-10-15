@@ -16,7 +16,10 @@ class MinicaseNode(BaseModel):
         description="Foreign Key UUID merujuk ke major_node induk",
     )
     minicase_number: int = Field(
-        ..., ge=1, le=10, description="Nomor urut node (1 s.d. 10)"
+        ...,
+        ge=2,
+        le=11,
+        description="Nomor urut node trial (2 s.d. 11, nomor 1 untuk rules pengerjaan di frontend)",
     )
     minicase_title: str = Field(
         ..., min_length=1, max_length=50, description="Judul interaktif kontekstual (maks. 2 kata)"

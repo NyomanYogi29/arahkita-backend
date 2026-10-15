@@ -19,7 +19,8 @@ Dokumen ini adalah acuan utama bagi AI Coding Agent dan pengembang manusia dalam
    - Backend memproses data tersebut menggunakan LLM dan mengembalikan 2–6 pilihan rekomendasi jurusan kuliah dalam bentuk node visual (`MajorNode`) yang siap disimpan di SQLite lokal frontend untuk kapabilitas offline.
 2. **Eksplorasi Pohon Jurusan & Interactive Trial (Child Nodes & Summary)**:
    - Pengguna memilih salah satu jurusan rekomendasi yang membuat mereka penasaran.
-   - Backend men-generate *child nodes* dari jurusan tersebut, di mana setiap child node berisi mini-case atau simulasi studi/karir (*trial*).
+   - Node pertama (nomor 1) dialokasikan khusus untuk panduan/aturan pengerjaan (*rules*) yang dikelola langsung oleh frontend di state/SQLite lokal.
+   - Backend men-generate *child nodes* studi kasus (`MinicaseNode`) dari jurusan tersebut, dengan nomor urut `minicase_number` dimulai dari **2 hingga maksimal 11** (berasal dari 3–5 mata kuliah dasar × 2 studi kasus: 1 Pilihan Ganda + 1 Esai).
    - Pengguna menyelesaikan trial satu demi satu.
    - Setelah trial selesai, backend menyusun dan mengembalikan sebuah **Rangkuman Keminatan Komprehensif** berdasarkan performa dan preferensi siswa selama trial.
 
