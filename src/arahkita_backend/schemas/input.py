@@ -20,3 +20,18 @@ class InputKeminatan(BaseModel):
     nilai: SubjectsScore = Field(
         ..., description="Skor nilai mata pelajaran"
     )
+
+
+SUBJECT_NAME_NORMALIZATION_MAP: dict[str, str] = {
+    "Matematika": "Matematika",
+    "IPA": "IPA",
+    "Bahasa_Inggris": "Bahasa Inggris",
+}
+
+
+def normalize_subject_name(raw_name: str) -> str:
+    """Menormalisasi nama mata pelajaran menjadi format standar human-readable."""
+    return SUBJECT_NAME_NORMALIZATION_MAP.get(
+        raw_name, raw_name.replace("_", " ").strip()
+    )
+

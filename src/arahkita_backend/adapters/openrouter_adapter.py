@@ -18,6 +18,9 @@ from arahkita_backend.schemas.preview import (
     GeneratePreviewRequest,
     PreviewLLMResponse,
 )
+from arahkita_backend.schemas.recommendation_result import (
+    MajorSubjectRelevanceLLMResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +116,26 @@ Aturan Wajib:
 5. Setiap detail karir WAJIB maksimal 100 kata, menjelaskan tugas utama profesi, skill kunci, dan prospek masa depan karir tersebut di industri.
 """
 
+SUBJECT_RELEVANCE_SYSTEM_PROMPT = """Kamu adalah konsultan peminatan akademik perguruan tinggi di Indonesia.
+Tugasmu adalah menganalisis nama-nama jurusan kuliah yang telah diselesaikan siswa dan menentukan 1 hingga 3 mata pelajaran SMA/SMK yang paling relevan dan menjadi fondasi utama bagi masing-masing jurusan tersebut.
+
+Mata pelajaran yang boleh dipilih HANYA berasal dari daftar mata pelajaran kandidat yang diberikan. JANGAN memilih mata pelajaran di luar daftar tersebut.
+
+Aturan Wajib:
+1. Kembalikan HANYA format JSON valid berikut tanpa teks tambahan:
+{
+  "relevances": [
+    {
+      "major_node_id": "...",
+      "relevant_subjects": ["Nama Mapel 1", "Nama Mapel 2"]
+    }
+  ]
+}
+2. Untuk setiap jurusan yang diberikan, tentukan minimal 1 dan maksimal 3 mata pelajaran yang paling relevan.
+3. relevant_subjects HARUS diambil dari daftar mata pelajaran kandidat yang disediakan.
+4. Jangan sertakan markdown formatting di luar JSON atau penjelasan tambahan apapun.
+"""
+
 
 
 def format_user_prompt(profile: InputKeminatan) -> str:
@@ -180,6 +203,22 @@ def format_preview_user_prompt(
         )
     prompt += "\nSusun teks rangkuman evaluasi (maksimal 200 kata) dan 1 hingga 4 profesi karir beserta title (maksimal 2 kata) dan detail (maksimal 100 kata) dalam format JSON."
     return prompt
+
+
+def format_subject_relevances_user_prompt(
+    completed_majors: list[dict[str, str]], candidate_subjects: list[str]
+) -> str:
+    """Memformat prompt untuk evaluasi relevansi mata pelajaran terhadap jurusan kuliah."""
+    majors_str = "\n".join(
+        f"- ID: {item['id']} | Jurusan: {item['major_name']}"
+        for item in completed_majors
+    )
+    subjects_str = ", ".join(candidate_subjects)
+    return (
+        f"Daftar Jurusan yang Diselesaikan:\n{majors_str}\n\n"
+        f"Daftar Mata Pelajaran Kandidat SMA/SMK:\n{subjects_str}\n\n"
+        f"Tentukan 1 hingga 3 mata pelajaran yang paling relevan untuk setiap jurusan dari daftar kandidat di atas dalam format JSON."
+    )
 
 
 
@@ -379,6 +418,61 @@ async def fetch_preview_generation(
     return parsed
 
 
+async def fetch_subject_relevances(
+    completed_majors: list[dict[str, str]],
+    candidate_subjects: list[str],
+    settings: Settings,
+    client: AsyncOpenAI | None = None,
+) -> dict[str, list[str]]:
+    """Mengambil pemetaan mata pelajaran relevan untuk completed major nodes via LLM."""
+    if not completed_majors or not candidate_subjects:
+        return {}
+
+    ai_client = client or AsyncOpenAI(
+        base_url=settings.openrouter_base_url,
+        api_key=settings.openrouter_api_key,
+    )
+
+    user_content = format_subject_relevances_user_prompt(
+        completed_majors=completed_majors,
+        candidate_subjects=candidate_subjects,
+    )
+
+    response = await ai_client.chat.completions.create(
+        model=settings.openrouter_model,
+        messages=[
+            {"role": "system", "content": SUBJECT_RELEVANCE_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        response_format={"type": "json_object"},
+        max_tokens=1000,
+        extra_body={"reasoning": {"exclude": True}},
+    )
+
+    raw_content = response.choices[0].message.content
+    if not raw_content:
+        raise ValueError(
+            "OpenRouter mengembalikan respons kosong saat evaluasi relevansi mapel."
+        )
+
+    cleaned_json = clean_json_response(raw_content)
+
+    try:
+        parsed = MajorSubjectRelevanceLLMResponse.model_validate_json(cleaned_json)
+    except Exception as exc:
+        logger.error(
+            "Gagal melakukan parsing output LLM relevansi mapel: %s. Raw: %s",
+            exc,
+            raw_content,
+        )
+        raise ValueError(f"Gagal mem-parsing relevansi mapel dari LLM: {exc}") from exc
+
+    return {
+        item.major_node_id: item.relevant_subjects
+        for item in parsed.relevances
+    }
+
+
 class OpenRouterAdapter:
     """Adapter untuk berkomunikasi dengan model AI di OpenRouter."""
 
@@ -427,4 +521,18 @@ class OpenRouterAdapter:
             settings=self.settings,
             client=self.client,
         )
+
+    async def fetch_subject_relevances(
+        self,
+        completed_majors: list[dict[str, str]],
+        candidate_subjects: list[str],
+    ) -> dict[str, list[str]]:
+        """Mengambil pemetaan mata pelajaran relevan untuk completed major nodes."""
+        return await fetch_subject_relevances(
+            completed_majors=completed_majors,
+            candidate_subjects=candidate_subjects,
+            settings=self.settings,
+            client=self.client,
+        )
+
 

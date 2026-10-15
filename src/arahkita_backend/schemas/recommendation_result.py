@@ -1,7 +1,24 @@
 from pydantic import BaseModel, Field
 
+from arahkita_backend.schemas.input import InputKeminatan
 from arahkita_backend.schemas.major_node import MajorNode
 from arahkita_backend.schemas.preview import MajorNodePreview
+
+
+class MajorNodeSubjectRelevance(BaseModel):
+    id: str = Field(
+        ...,
+        pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+        description="UUID v4 entitas relevansi mapel",
+    )
+    major_node_id: str = Field(
+        ...,
+        pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+        description="UUID v4 node jurusan terkait",
+    )
+    subject_name: str = Field(
+        ..., min_length=1, description="Nama mata pelajaran SMA/SMK yang relevan"
+    )
 
 
 class MajorRecommendationResult(BaseModel):
@@ -35,6 +52,10 @@ class MajorRecommendationResult(BaseModel):
         default=None,
         description="Objek preview lengkap beserta jalur karir jika sudah selesai",
     )
+    subject_relevances: list[MajorNodeSubjectRelevance] = Field(
+        default_factory=list,
+        description="Daftar badge mata pelajaran SMA/SMK yang relevan (1-3 untuk jurusan yang selesai)",
+    )
 
 
 class RecommendationResultsRequest(BaseModel):
@@ -46,3 +67,23 @@ class RecommendationResultsRequest(BaseModel):
         default_factory=list,
         description="Daftar hasil preview/evaluasi jurusan yang sudah diselesaikan",
     )
+    profile: InputKeminatan | None = Field(
+        default=None,
+        description="Profil keminatan siswa dari onboarding (opsional)",
+    )
+
+
+class MajorSubjectRelevanceLLMItem(BaseModel):
+    major_node_id: str = Field(..., description="ID major_node")
+    relevant_subjects: list[str] = Field(
+        default_factory=list,
+        description="Daftar nama mata pelajaran relevan (1-3 mapel)",
+    )
+
+
+class MajorSubjectRelevanceLLMResponse(BaseModel):
+    relevances: list[MajorSubjectRelevanceLLMItem] = Field(
+        default_factory=list,
+        description="Daftar relevansi mapel untuk tiap major_node yang selesai",
+    )
+

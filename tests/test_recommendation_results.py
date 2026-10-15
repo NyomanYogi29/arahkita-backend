@@ -1,13 +1,24 @@
 import unittest
+from unittest.mock import AsyncMock, MagicMock
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
+from arahkita_backend.adapters.openrouter_adapter import OpenRouterAdapter
+from arahkita_backend.deps import get_openrouter_adapter
 from arahkita_backend.main import app
+from arahkita_backend.schemas.input import (
+    SUBJECT_NAME_NORMALIZATION_MAP,
+    InputKeminatan,
+    SubjectsScore,
+    normalize_subject_name,
+)
 from arahkita_backend.schemas.major_node import MajorNode
 from arahkita_backend.schemas.preview import (
     MajorNodeCareerPath,
     MajorNodePreview,
 )
 from arahkita_backend.schemas.recommendation_result import (
+    MajorNodeSubjectRelevance,
     MajorRecommendationResult,
     RecommendationResultsRequest,
 )
@@ -16,7 +27,36 @@ from arahkita_backend.services.recommendation_result_service import (
 )
 
 
-class TestRecommendationResultsService(unittest.TestCase):
+class TestRecommendationResultSchemas(unittest.TestCase):
+    def test_major_node_subject_relevance_valid(self) -> None:
+        relevance = MajorNodeSubjectRelevance(
+            id="11111111-1111-4111-8111-111111111111",
+            major_node_id="22222222-2222-4222-8222-222222222222",
+            subject_name="Matematika",
+        )
+        self.assertEqual(relevance.subject_name, "Matematika")
+        self.assertEqual(relevance.major_node_id, "22222222-2222-4222-8222-222222222222")
+
+    def test_major_node_subject_relevance_invalid_uuid(self) -> None:
+        with self.assertRaises(ValidationError):
+            MajorNodeSubjectRelevance(
+                id="invalid-uuid",
+                major_node_id="22222222-2222-4222-8222-222222222222",
+                subject_name="Matematika",
+            )
+
+    def test_subject_name_normalization(self) -> None:
+        self.assertEqual(SUBJECT_NAME_NORMALIZATION_MAP["Bahasa_Inggris"], "Bahasa Inggris")
+        self.assertEqual(SUBJECT_NAME_NORMALIZATION_MAP["Matematika"], "Matematika")
+        self.assertEqual(SUBJECT_NAME_NORMALIZATION_MAP["IPA"], "IPA")
+
+        self.assertEqual(normalize_subject_name("Bahasa_Inggris"), "Bahasa Inggris")
+        self.assertEqual(normalize_subject_name("Matematika"), "Matematika")
+        self.assertEqual(normalize_subject_name("IPA"), "IPA")
+        self.assertEqual(normalize_subject_name("Fisika_Terapan"), "Fisika Terapan")
+
+
+class TestRecommendationResultsService(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.node_ti = MajorNode(
             id="11111111-1111-4111-8111-111111111111",
@@ -63,40 +103,44 @@ class TestRecommendationResultsService(unittest.TestCase):
             ],
         )
 
-    def test_empty_major_nodes(self) -> None:
+        self.profile = InputKeminatan(
+            minat="Suka pemrograman dan logika",
+            nilai=SubjectsScore(Matematika=95, IPA=85, Bahasa_Inggris=90),
+        )
+
+    async def test_empty_major_nodes(self) -> None:
         request = RecommendationResultsRequest(
             major_nodes=[],
             previews=[self.preview_ti],
         )
-        results = calculate_recommendation_leaderboard(request)
+        results = await calculate_recommendation_leaderboard(request)
         self.assertEqual(results, [])
 
-    def test_all_uncompleted_nodes(self) -> None:
+    async def test_all_uncompleted_nodes(self) -> None:
         request = RecommendationResultsRequest(
             major_nodes=[self.node_ti, self.node_si, self.node_dkv],
             previews=[],
         )
-        results = calculate_recommendation_leaderboard(request)
+        results = await calculate_recommendation_leaderboard(request)
         self.assertEqual(len(results), 3)
 
         for item in results:
             self.assertEqual(item.matching_percentage, 0)
             self.assertFalse(item.is_completed)
             self.assertIsNone(item.preview)
+            self.assertEqual(item.subject_relevances, [])
 
         # Mempertahankan urutan input semula
         self.assertEqual(results[0].major_name, "Teknik Informatika")
         self.assertEqual(results[1].major_name, "Sistem Informasi")
         self.assertEqual(results[2].major_name, "Desain Komunikasi Visual")
 
-    def test_partially_completed_nodes_sorted_descending(self) -> None:
-        # Input order: DKV, SI, TI
-        # TI has 95%, SI has 78%, DKV has no preview (0%)
+    async def test_partially_completed_nodes_sorted_descending(self) -> None:
         request = RecommendationResultsRequest(
             major_nodes=[self.node_dkv, self.node_si, self.node_ti],
             previews=[self.preview_si, self.preview_ti],
         )
-        results = calculate_recommendation_leaderboard(request)
+        results = await calculate_recommendation_leaderboard(request)
         self.assertEqual(len(results), 3)
 
         # Rank 1: TI (95%)
@@ -117,7 +161,7 @@ class TestRecommendationResultsService(unittest.TestCase):
         self.assertFalse(results[2].is_completed)
         self.assertIsNone(results[2].preview)
 
-    def test_duplicate_previews_picks_highest_score(self) -> None:
+    async def test_duplicate_previews_picks_highest_score(self) -> None:
         preview_ti_lower = MajorNodePreview(
             id="aaaa3333-3333-4333-8333-333333333333",
             major_node_id=self.node_ti.id,
@@ -136,11 +180,11 @@ class TestRecommendationResultsService(unittest.TestCase):
             major_nodes=[self.node_ti],
             previews=[preview_ti_lower, self.preview_ti],
         )
-        results = calculate_recommendation_leaderboard(request)
+        results = await calculate_recommendation_leaderboard(request)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].matching_percentage, 95)
 
-    def test_orphan_preview_ignored(self) -> None:
+    async def test_orphan_preview_ignored(self) -> None:
         orphan_preview = MajorNodePreview(
             id="aaaa9999-9999-4999-8999-999999999999",
             major_node_id="99999999-9999-4999-8999-999999999999",
@@ -159,12 +203,12 @@ class TestRecommendationResultsService(unittest.TestCase):
             major_nodes=[self.node_ti],
             previews=[orphan_preview],
         )
-        results = calculate_recommendation_leaderboard(request)
+        results = await calculate_recommendation_leaderboard(request)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].matching_percentage, 0)
         self.assertFalse(results[0].is_completed)
 
-    def test_stable_sort_on_equal_percentage(self) -> None:
+    async def test_stable_sort_on_equal_percentage(self) -> None:
         preview_si_equal = MajorNodePreview(
             id="aaaa4444-4444-4444-8444-444444444444",
             major_node_id=self.node_si.id,
@@ -179,22 +223,129 @@ class TestRecommendationResultsService(unittest.TestCase):
                 )
             ],
         )
-        # Urutan input: SI duluan, baru TI. Keduanya bernilai 95%.
         request = RecommendationResultsRequest(
             major_nodes=[self.node_si, self.node_ti],
             previews=[preview_si_equal, self.preview_ti],
         )
-        results = calculate_recommendation_leaderboard(request)
+        results = await calculate_recommendation_leaderboard(request)
         self.assertEqual(len(results), 2)
         self.assertEqual(results[0].id, self.node_si.id)
         self.assertEqual(results[1].id, self.node_ti.id)
 
+    async def test_completed_nodes_with_profile_and_mock_adapter(self) -> None:
+        mock_adapter = MagicMock(spec=OpenRouterAdapter)
+        mock_adapter.fetch_subject_relevances = AsyncMock(
+            return_value={
+                self.node_ti.id: ["Matematika", "Bahasa Inggris"],
+                self.node_si.id: ["Matematika", "IPA"],
+            }
+        )
+
+        request = RecommendationResultsRequest(
+            major_nodes=[self.node_ti, self.node_si, self.node_dkv],
+            previews=[self.preview_ti, self.preview_si],
+            profile=self.profile,
+        )
+
+        results = await calculate_recommendation_leaderboard(request, mock_adapter)
+        self.assertEqual(len(results), 3)
+
+        # TI (completed)
+        self.assertEqual(results[0].id, self.node_ti.id)
+        self.assertEqual(len(results[0].subject_relevances), 2)
+        ti_subjects = [sr.subject_name for sr in results[0].subject_relevances]
+        self.assertEqual(ti_subjects, ["Matematika", "Bahasa Inggris"])
+        for sr in results[0].subject_relevances:
+            self.assertEqual(sr.major_node_id, self.node_ti.id)
+            self.assertRegex(
+                sr.id,
+                r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            )
+
+        # SI (completed)
+        self.assertEqual(results[1].id, self.node_si.id)
+        self.assertEqual(len(results[1].subject_relevances), 2)
+        si_subjects = [sr.subject_name for sr in results[1].subject_relevances]
+        self.assertEqual(si_subjects, ["Matematika", "IPA"])
+
+        # DKV (uncompleted)
+        self.assertEqual(results[2].id, self.node_dkv.id)
+        self.assertEqual(results[2].subject_relevances, [])
+
+    async def test_subject_normalization_and_filtering(self) -> None:
+        mock_adapter = MagicMock(spec=OpenRouterAdapter)
+        # LLM mengembalikan mapel dengan underscore dan mapel di luar kandidat
+        mock_adapter.fetch_subject_relevances = AsyncMock(
+            return_value={
+                self.node_ti.id: ["Bahasa_Inggris", "Fisika Modern", "Matematika"],
+            }
+        )
+
+        request = RecommendationResultsRequest(
+            major_nodes=[self.node_ti],
+            previews=[self.preview_ti],
+            profile=self.profile,
+        )
+
+        results = await calculate_recommendation_leaderboard(request, mock_adapter)
+        self.assertEqual(len(results), 1)
+
+        subjects = [sr.subject_name for sr in results[0].subject_relevances]
+        # Fisika Modern diabaikan, Bahasa_Inggris dinormalisasi menjadi Bahasa Inggris
+        self.assertEqual(subjects, ["Bahasa Inggris", "Matematika"])
+
+    async def test_llm_empty_fallback_to_highest_score(self) -> None:
+        # Siswa memiliki nilai IPA tertinggi (98)
+        profile_ipa = InputKeminatan(
+            minat="Sains Alam",
+            nilai=SubjectsScore(Matematika=70, IPA=98, Bahasa_Inggris=80),
+        )
+        mock_adapter = MagicMock(spec=OpenRouterAdapter)
+        # LLM mengembalikan list kosong atau mapel tidak dikenal
+        mock_adapter.fetch_subject_relevances = AsyncMock(
+            return_value={self.node_ti.id: ["Sosiologi"]}
+        )
+
+        request = RecommendationResultsRequest(
+            major_nodes=[self.node_ti],
+            previews=[self.preview_ti],
+            profile=profile_ipa,
+        )
+
+        results = await calculate_recommendation_leaderboard(request, mock_adapter)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results[0].subject_relevances), 1)
+        # Fallback ke mapel nilai tertinggi yaitu IPA
+        self.assertEqual(results[0].subject_relevances[0].subject_name, "IPA")
+
+    async def test_llm_adapter_exception_graceful_degradation(self) -> None:
+        mock_adapter = MagicMock(spec=OpenRouterAdapter)
+        mock_adapter.fetch_subject_relevances = AsyncMock(
+            side_effect=RuntimeError("OpenRouter gateway error")
+        )
+
+        request = RecommendationResultsRequest(
+            major_nodes=[self.node_ti],
+            previews=[self.preview_ti],
+            profile=self.profile,
+        )
+
+        # Tidak boleh melempar exception
+        results = await calculate_recommendation_leaderboard(request, mock_adapter)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].subject_relevances, [])
+
 
 class TestRecommendationResultsAPI(unittest.TestCase):
     def setUp(self) -> None:
+        self.mock_adapter = MagicMock(spec=OpenRouterAdapter)
         self.client = TestClient(app)
+        app.dependency_overrides[get_openrouter_adapter] = lambda: self.mock_adapter
 
-    def test_post_recommendation_results_success(self) -> None:
+    def tearDown(self) -> None:
+        app.dependency_overrides.clear()
+
+    def test_post_recommendation_results_without_profile(self) -> None:
         payload = {
             "major_nodes": [
                 {
@@ -240,13 +391,65 @@ class TestRecommendationResultsAPI(unittest.TestCase):
         self.assertEqual(data[0]["matching_percentage"], 90)
         self.assertTrue(data[0]["is_completed"])
         self.assertIsNotNone(data[0]["preview"])
-        self.assertEqual(data[0]["preview"]["matching_percentage"], 90)
+        self.assertEqual(data[0]["subject_relevances"], [])
 
         # Leaderboard rank 2: SI (0%)
         self.assertEqual(data[1]["major_name"], "Sistem Informasi")
         self.assertEqual(data[1]["matching_percentage"], 0)
         self.assertFalse(data[1]["is_completed"])
         self.assertIsNone(data[1]["preview"])
+        self.assertEqual(data[1]["subject_relevances"], [])
+
+    def test_post_recommendation_results_with_profile_and_subjects(self) -> None:
+        self.mock_adapter.fetch_subject_relevances = AsyncMock(
+            return_value={
+                "11111111-1111-4111-8111-111111111111": ["Matematika", "Bahasa Inggris"]
+            }
+        )
+
+        payload = {
+            "major_nodes": [
+                {
+                    "id": "11111111-1111-4111-8111-111111111111",
+                    "major_name": "Teknik Informatika",
+                    "circle_color": "#4F46E5",
+                }
+            ],
+            "previews": [
+                {
+                    "id": "aaaa1111-1111-4111-8111-111111111111",
+                    "major_node_id": "11111111-1111-4111-8111-111111111111",
+                    "preview": "Sangat cocok.",
+                    "matching_percentage": 92,
+                    "career_paths": [
+                        {
+                            "id": "cccc1111-1111-4111-8111-111111111111",
+                            "major_node_preview_id": "aaaa1111-1111-4111-8111-111111111111",
+                            "title": "Software Engineer",
+                            "detail": "Pengembangan software.",
+                        }
+                    ],
+                }
+            ],
+            "profile": {
+                "minat": "Coding dan algoritma",
+                "nilai": {
+                    "Matematika": 95,
+                    "IPA": 80,
+                    "Bahasa_Inggris": 88,
+                },
+            },
+        }
+
+        response = self.client.post("/api/v1/recommendation-results", json=payload)
+        self.assertEqual(response.status_code, 200)
+
+        data = response.json()
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["matching_percentage"], 92)
+        self.assertEqual(len(data[0]["subject_relevances"]), 2)
+        self.assertEqual(data[0]["subject_relevances"][0]["subject_name"], "Matematika")
+        self.assertEqual(data[0]["subject_relevances"][1]["subject_name"], "Bahasa Inggris")
 
     def test_post_recommendation_results_empty(self) -> None:
         payload = {"major_nodes": [], "previews": []}
