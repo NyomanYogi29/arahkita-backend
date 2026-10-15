@@ -87,10 +87,9 @@ async def calculate_recommendation_leaderboard(
     # Evaluasi subject relevance untuk node yang selesai
     completed_nodes = [item for item in results if item.is_completed]
     if completed_nodes and request.profile is not None and adapter is not None:
-        raw_scores = request.profile.nilai.model_dump()
         candidate_map: dict[str, int] = {
-            normalize_subject_name(key): int(score)
-            for key, score in raw_scores.items()
+            normalize_subject_name(key): score
+            for key, score in request.profile.nilai.items()
         }
         candidate_subjects = list(candidate_map.keys())
 
@@ -99,7 +98,7 @@ async def calculate_recommendation_leaderboard(
             candidate_map.items(), key=lambda x: x[1], reverse=True
         )
         fallback_subject = (
-            sorted_by_score[0][0] if sorted_by_score else "Matematika"
+            sorted_by_score[0][0] if sorted_by_score else "matematika"
         )
 
         completed_majors_payload: list[dict[str, str]] = [

@@ -140,12 +140,13 @@ Aturan Wajib:
 
 def format_user_prompt(profile: InputKeminatan) -> str:
     """Memformat profil keminatan dan nilai siswa menjadi prompt teks untuk LLM."""
+    scores_text = "\n".join(
+        f"- Nilai {subject}: {score}" for subject, score in profile.nilai.items()
+    )
     return (
         f"Data Siswa:\n"
         f"- Minat: {profile.minat}\n"
-        f"- Nilai Matematika: {profile.nilai.Matematika}\n"
-        f"- Nilai IPA: {profile.nilai.IPA}\n"
-        f"- Nilai Bahasa Inggris: {profile.nilai.Bahasa_Inggris}\n\n"
+        f"{scores_text}\n\n"
         f"Berikan 2 hingga 6 rekomendasi nama jurusan kuliah dalam format JSON."
     )
 
@@ -156,12 +157,14 @@ def format_minicases_user_prompt(
     """Memformat prompt untuk generasi minicases mata kuliah dasar."""
     prompt = f"Jurusan yang dieksplorasi: {major_name}\n"
     if profile is not None:
+        scores_text = "\n".join(
+            f"- Nilai {subject}: {score}"
+            for subject, score in profile.nilai.items()
+        )
         prompt += (
             f"Konteks Profil Siswa:\n"
             f"- Minat: {profile.minat}\n"
-            f"- Nilai Matematika: {profile.nilai.Matematika}\n"
-            f"- Nilai IPA: {profile.nilai.IPA}\n"
-            f"- Nilai Bahasa Inggris: {profile.nilai.Bahasa_Inggris}\n"
+            f"{scores_text}\n"
         )
     prompt += "Rancang 3 hingga 5 mata kuliah dasar beserta studi kasus pilihan ganda dan esai reflektif dalam format JSON."
     return prompt
@@ -194,12 +197,14 @@ def format_preview_user_prompt(
     if request.user_satisfaction_rating is not None:
         prompt += f"- Rating Kepuasan Siswa: {request.user_satisfaction_rating}/5.0\n"
     if request.profile is not None:
+        scores_text = "\n".join(
+            f"- Nilai {subject}: {score}"
+            for subject, score in request.profile.nilai.items()
+        )
         prompt += (
             f"\nProfil Keminatan Awal Siswa:\n"
             f"- Minat: {request.profile.minat}\n"
-            f"- Nilai Matematika: {request.profile.nilai.Matematika}\n"
-            f"- Nilai IPA: {request.profile.nilai.IPA}\n"
-            f"- Nilai Bahasa Inggris: {request.profile.nilai.Bahasa_Inggris}\n"
+            f"{scores_text}\n"
         )
     prompt += "\nSusun teks rangkuman evaluasi (maksimal 200 kata) dan 1 hingga 4 profesi karir beserta title (maksimal 2 kata) dan detail (maksimal 100 kata) dalam format JSON."
     return prompt

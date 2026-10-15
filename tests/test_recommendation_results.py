@@ -46,14 +46,11 @@ class TestRecommendationResultSchemas(unittest.TestCase):
             )
 
     def test_subject_name_normalization(self) -> None:
-        self.assertEqual(SUBJECT_NAME_NORMALIZATION_MAP["Bahasa_Inggris"], "Bahasa Inggris")
-        self.assertEqual(SUBJECT_NAME_NORMALIZATION_MAP["Matematika"], "Matematika")
-        self.assertEqual(SUBJECT_NAME_NORMALIZATION_MAP["IPA"], "IPA")
-
-        self.assertEqual(normalize_subject_name("Bahasa_Inggris"), "Bahasa Inggris")
-        self.assertEqual(normalize_subject_name("Matematika"), "Matematika")
-        self.assertEqual(normalize_subject_name("IPA"), "IPA")
-        self.assertEqual(normalize_subject_name("Fisika_Terapan"), "Fisika Terapan")
+        self.assertEqual(normalize_subject_name("  Bahasa Inggris  "), "bahasa inggris")
+        self.assertEqual(normalize_subject_name("Matematika"), "matematika")
+        self.assertEqual(normalize_subject_name("IPA"), "ipa")
+        self.assertEqual(normalize_subject_name("Fisika"), "fisika")
+        self.assertEqual(normalize_subject_name("KIMIA"), "kimia")
 
 
 class TestRecommendationResultsService(unittest.IsolatedAsyncioTestCase):
@@ -105,7 +102,7 @@ class TestRecommendationResultsService(unittest.IsolatedAsyncioTestCase):
 
         self.profile = InputKeminatan(
             minat="Suka pemrograman dan logika",
-            nilai=SubjectsScore(Matematika=95, IPA=85, Bahasa_Inggris=90),
+            nilai={"matematika": 95, "ipa": 85, "bahasa inggris": 90},
         )
 
     async def test_empty_major_nodes(self) -> None:
@@ -254,7 +251,7 @@ class TestRecommendationResultsService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0].id, self.node_ti.id)
         self.assertEqual(len(results[0].subject_relevances), 2)
         ti_subjects = [sr.subject_name for sr in results[0].subject_relevances]
-        self.assertEqual(ti_subjects, ["Matematika", "Bahasa Inggris"])
+        self.assertEqual(ti_subjects, ["matematika", "bahasa inggris"])
         for sr in results[0].subject_relevances:
             self.assertEqual(sr.major_node_id, self.node_ti.id)
             self.assertRegex(
@@ -266,7 +263,7 @@ class TestRecommendationResultsService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[1].id, self.node_si.id)
         self.assertEqual(len(results[1].subject_relevances), 2)
         si_subjects = [sr.subject_name for sr in results[1].subject_relevances]
-        self.assertEqual(si_subjects, ["Matematika", "IPA"])
+        self.assertEqual(si_subjects, ["matematika", "ipa"])
 
         # DKV (uncompleted)
         self.assertEqual(results[2].id, self.node_dkv.id)
@@ -274,10 +271,10 @@ class TestRecommendationResultsService(unittest.IsolatedAsyncioTestCase):
 
     async def test_subject_normalization_and_filtering(self) -> None:
         mock_adapter = MagicMock(spec=OpenRouterAdapter)
-        # LLM mengembalikan mapel dengan underscore dan mapel di luar kandidat
+        # LLM mengembalikan mapel dengan huruf kapital dan mapel di luar kandidat
         mock_adapter.fetch_subject_relevances = AsyncMock(
             return_value={
-                self.node_ti.id: ["Bahasa_Inggris", "Fisika Modern", "Matematika"],
+                self.node_ti.id: ["Bahasa Inggris", "Fisika Modern", "Matematika"],
             }
         )
 
@@ -291,14 +288,14 @@ class TestRecommendationResultsService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(results), 1)
 
         subjects = [sr.subject_name for sr in results[0].subject_relevances]
-        # Fisika Modern diabaikan, Bahasa_Inggris dinormalisasi menjadi Bahasa Inggris
-        self.assertEqual(subjects, ["Bahasa Inggris", "Matematika"])
+        # Fisika Modern diabaikan, Bahasa Inggris & Matematika dinormalisasi menjadi lowercase
+        self.assertEqual(subjects, ["bahasa inggris", "matematika"])
 
     async def test_llm_empty_fallback_to_highest_score(self) -> None:
         # Siswa memiliki nilai IPA tertinggi (98)
         profile_ipa = InputKeminatan(
             minat="Sains Alam",
-            nilai=SubjectsScore(Matematika=70, IPA=98, Bahasa_Inggris=80),
+            nilai={"matematika": 70, "ipa": 98, "bahasa inggris": 80},
         )
         mock_adapter = MagicMock(spec=OpenRouterAdapter)
         # LLM mengembalikan list kosong atau mapel tidak dikenal
@@ -315,8 +312,8 @@ class TestRecommendationResultsService(unittest.IsolatedAsyncioTestCase):
         results = await calculate_recommendation_leaderboard(request, mock_adapter)
         self.assertEqual(len(results), 1)
         self.assertEqual(len(results[0].subject_relevances), 1)
-        # Fallback ke mapel nilai tertinggi yaitu IPA
-        self.assertEqual(results[0].subject_relevances[0].subject_name, "IPA")
+        # Fallback ke mapel nilai tertinggi yaitu ipa
+        self.assertEqual(results[0].subject_relevances[0].subject_name, "ipa")
 
     async def test_llm_adapter_exception_graceful_degradation(self) -> None:
         mock_adapter = MagicMock(spec=OpenRouterAdapter)
@@ -436,7 +433,7 @@ class TestRecommendationResultsAPI(unittest.TestCase):
                 "nilai": {
                     "Matematika": 95,
                     "IPA": 80,
-                    "Bahasa_Inggris": 88,
+                    "Bahasa Inggris": 88,
                 },
             },
         }
@@ -448,8 +445,8 @@ class TestRecommendationResultsAPI(unittest.TestCase):
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["matching_percentage"], 92)
         self.assertEqual(len(data[0]["subject_relevances"]), 2)
-        self.assertEqual(data[0]["subject_relevances"][0]["subject_name"], "Matematika")
-        self.assertEqual(data[0]["subject_relevances"][1]["subject_name"], "Bahasa Inggris")
+        self.assertEqual(data[0]["subject_relevances"][0]["subject_name"], "matematika")
+        self.assertEqual(data[0]["subject_relevances"][1]["subject_name"], "bahasa inggris")
 
     def test_post_recommendation_results_empty(self) -> None:
         payload = {"major_nodes": [], "previews": []}
