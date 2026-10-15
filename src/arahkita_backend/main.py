@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from arahkita_backend.api.v1.majors import router as majors_router
 from arahkita_backend.api.v1.minicases import router as minicases_router
+from arahkita_backend.api.v1.preview import router as preview_router
 from arahkita_backend.config.settings import get_settings
 
 app = FastAPI(
@@ -24,6 +25,8 @@ app.add_middleware(
 # Registrasi Modular Router
 app.include_router(majors_router, prefix="/api/v1")
 app.include_router(minicases_router, prefix="/api/v1")
+app.include_router(preview_router, prefix="/api/v1")
+
 
 
 @app.get("/health", tags=["Health"])

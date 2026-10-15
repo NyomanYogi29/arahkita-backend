@@ -14,6 +14,10 @@ from arahkita_backend.schemas.minicase_node import (
     MinicasesGenerationLLMResponse,
     SubjectTrialLLMItem,
 )
+from arahkita_backend.schemas.preview import (
+    GeneratePreviewRequest,
+    PreviewLLMResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +91,22 @@ Aturan Wajib & Penalti:
 {"analytical_fit": 4, "interest_signal": 5, "is_serious_attempt": true}
 """
 
+PREVIEW_SYSTEM_PROMPT = """Kamu adalah konsultan peminatan karir dan akademik untuk siswa SMA/SMK di Indonesia.
+Tugasmu adalah menganalisis performa interaktif trial/minicase dan profil siswa terhadap suatu jurusan kuliah, lalu menyusun:
+1. preview: Teks rangkuman naratif suportif, komunikatif, dan memotivasi (maksimal 200 kata) yang menguraikan keselarasan minat, daya analitis, dan potensi siswa di jurusan tersebut.
+2. career_paths: Daftar rekomendasi 1 hingga 4 jalur profesi/karir yang relevan dengan jurusan tersebut.
+
+Aturan Wajib:
+1. Kembalikan HANYA format JSON valid berikut tanpa markdown formatting tambahan di luar JSON:
+{
+  "preview": "...",
+  "career_paths": ["Nama Karir 1", "Nama Karir 2"]
+}
+2. Panjang preview TIDAK BOLEH lebih dari 200 kata. Gunakan bahasa Indonesia yang ramah, jelas, dan menginspirasi siswa SMA/SMK.
+3. Jumlah career_paths minimal 1 dan maksimal 4.
+4. Setiap nama karir dalam career_paths WAJIB maksimal 2 kata (contoh: "Software Engineer", "Data Scientist", "Guru Matematika", "Peneliti Sains").
+"""
+
 
 def format_user_prompt(profile: InputKeminatan) -> str:
     """Memformat profil keminatan dan nilai siswa menjadi prompt teks untuk LLM."""
@@ -126,6 +146,33 @@ def format_essay_eval_user_prompt(
         f"Pedoman Penilaian:\n{evaluation_hint}\n\n"
         f"Jawaban Siswa:\n{user_answer}"
     )
+
+
+def format_preview_user_prompt(
+    request: GeneratePreviewRequest, matching_percentage: int
+) -> str:
+    """Memformat data evaluasi trial dan profil siswa menjadi prompt teks untuk preview."""
+    prompt = (
+        f"Jurusan yang dievaluasi: {request.major_name}\n"
+        f"Kalkulasi Matching Percentage: {matching_percentage}%\n\n"
+        f"Metrik Performa Trial Siswa:\n"
+        f"- Akurasi Pilihan Ganda (MCQ): {request.mcq_accuracy}%\n"
+        f"- Skor Kemampuan Analitis Esai: {request.essay_analytical_score}/5.0\n"
+        f"- Skor Minat/Antusiasme Esai: {request.essay_interest_score}/5.0\n"
+        f"- Total Trial yang Diselesaikan: {request.total_trials_completed}\n"
+    )
+    if request.user_satisfaction_rating is not None:
+        prompt += f"- Rating Kepuasan Siswa: {request.user_satisfaction_rating}/5.0\n"
+    if request.profile is not None:
+        prompt += (
+            f"\nProfil Keminatan Awal Siswa:\n"
+            f"- Minat: {request.profile.minat}\n"
+            f"- Nilai Matematika: {request.profile.nilai.Matematika}\n"
+            f"- Nilai IPA: {request.profile.nilai.IPA}\n"
+            f"- Nilai Bahasa Inggris: {request.profile.nilai.Bahasa_Inggris}\n"
+        )
+    prompt += "\nSusun teks rangkuman evaluasi (maksimal 200 kata) dan 1 hingga 4 profesi karir (maksimal 2 kata per karir) dalam format JSON."
+    return prompt
 
 
 def clean_json_response(raw_text: str) -> str:
@@ -281,6 +328,49 @@ async def evaluate_essay_answer(
     )
 
 
+async def fetch_preview_generation(
+    request: GeneratePreviewRequest,
+    matching_percentage: int,
+    settings: Settings,
+    client: AsyncOpenAI | None = None,
+) -> PreviewLLMResponse:
+    """Mengirim request ke OpenRouter untuk menghasilkan teks rangkuman evaluasi dan career paths."""
+    ai_client = client or AsyncOpenAI(
+        base_url=settings.openrouter_base_url,
+        api_key=settings.openrouter_api_key,
+    )
+
+    user_content = format_preview_user_prompt(
+        request=request,
+        matching_percentage=matching_percentage,
+    )
+
+    response = await ai_client.chat.completions.create(
+        model=settings.openrouter_model,
+        messages=[
+            {"role": "system", "content": PREVIEW_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        response_format={"type": "json_object"},
+        max_tokens=1500,
+        extra_body={"reasoning": {"exclude": True}},
+    )
+
+    raw_content = response.choices[0].message.content
+    if not raw_content:
+        raise ValueError("OpenRouter mengembalikan respons kosong saat men-generate preview.")
+
+    cleaned_json = clean_json_response(raw_content)
+
+    try:
+        parsed = PreviewLLMResponse.model_validate_json(cleaned_json)
+    except Exception as exc:
+        logger.error("Gagal melakukan parsing output LLM preview: %s. Raw: %s", exc, raw_content)
+        raise ValueError(f"Gagal mem-parsing preview dari LLM: {exc}") from exc
+
+    return parsed
+
+
 class OpenRouterAdapter:
     """Adapter untuk berkomunikasi dengan model AI di OpenRouter."""
 
@@ -318,3 +408,15 @@ class OpenRouterAdapter:
             settings=self.settings,
             client=self.client,
         )
+
+    async def fetch_preview_generation(
+        self, request: GeneratePreviewRequest, matching_percentage: int
+    ) -> PreviewLLMResponse:
+        """Mengambil hasil generasi preview rangkuman jurusan dan career path dari LLM."""
+        return await fetch_preview_generation(
+            request=request,
+            matching_percentage=matching_percentage,
+            settings=self.settings,
+            client=self.client,
+        )
+

@@ -13,6 +13,12 @@ from .minicase_node import (
     MultipleChoiceLLMItem,
     SubjectTrialLLMItem,
 )
+from .preview import (
+    GeneratePreviewRequest,
+    MajorNodeCareerPath,
+    MajorNodePreview,
+    PreviewLLMResponse,
+)
 
 __all__ = [
     "InputKeminatan",
@@ -28,4 +34,9 @@ __all__ = [
     "EssayEvaluationRequest",
     "EssayEvaluationResult",
     "EssayEvaluationLLMResponse",
+    "GeneratePreviewRequest",
+    "MajorNodeCareerPath",
+    "MajorNodePreview",
+    "PreviewLLMResponse",
 ]
+
