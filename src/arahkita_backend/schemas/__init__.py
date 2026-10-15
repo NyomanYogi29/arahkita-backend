@@ -20,6 +20,10 @@ from .preview import (
     MajorNodePreview,
     PreviewLLMResponse,
 )
+from .recommendation_result import (
+    MajorRecommendationResult,
+    RecommendationResultsRequest,
+)
 
 __all__ = [
     "InputKeminatan",
@@ -40,6 +44,8 @@ __all__ = [
     "MajorNodePreview",
     "CareerPathLLMItem",
     "PreviewLLMResponse",
+    "MajorRecommendationResult",
+    "RecommendationResultsRequest",
 ]
 
 

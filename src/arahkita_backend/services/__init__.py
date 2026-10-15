@@ -11,6 +11,7 @@ from .preview_service import (
     sanitize_career_title,
     sanitize_preview_text,
 )
+from .recommendation_result_service import calculate_recommendation_leaderboard
 
 __all__ = [
     "get_major_recommendations",
@@ -22,6 +23,7 @@ __all__ = [
     "sanitize_career_title",
     "sanitize_career_detail",
     "sanitize_preview_text",
+    "calculate_recommendation_leaderboard",
 ]
 
 
