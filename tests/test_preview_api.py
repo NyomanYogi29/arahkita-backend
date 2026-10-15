@@ -7,6 +7,7 @@ from arahkita_backend.api.v1.preview import get_major_node_preview
 from arahkita_backend.deps import get_openrouter_adapter
 from arahkita_backend.main import app
 from arahkita_backend.schemas.preview import (
+    CareerPathLLMItem,
     GeneratePreviewRequest,
     PreviewLLMResponse,
 )
@@ -20,7 +21,16 @@ class TestPreviewAPI(unittest.IsolatedAsyncioTestCase):
     async def test_direct_get_major_node_preview(self) -> None:
         mock_llm_response = PreviewLLMResponse(
             preview="Hasil analisis menunjukkan minat kuat pada bidang matematika komputasi.",
-            career_paths=["Data Scientist", "Kriptografer"],
+            career_paths=[
+                CareerPathLLMItem(
+                    title="Data Scientist",
+                    detail="Mengolah big data untuk prediksi analitis.",
+                ),
+                CareerPathLLMItem(
+                    title="Kriptografer",
+                    detail="Mengembangkan algoritma keamanan enkripsi data.",
+                ),
+            ],
         )
         self.mock_adapter.fetch_preview_generation = AsyncMock(
             return_value=mock_llm_response
@@ -45,6 +55,9 @@ class TestPreviewAPI(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.matching_percentage, 85)
         self.assertEqual(len(result.career_paths), 2)
         self.assertEqual(result.career_paths[0].title, "Data Scientist")
+        self.assertEqual(
+            result.career_paths[0].detail, "Mengolah big data untuk prediksi analitis."
+        )
 
 
 class TestPreviewAPIIntegration(unittest.TestCase):
@@ -59,7 +72,16 @@ class TestPreviewAPIIntegration(unittest.TestCase):
     def test_http_post_preview_success(self) -> None:
         mock_llm_response = PreviewLLMResponse(
             preview="Siswa menunjukkan bakat analitis yang luar biasa.",
-            career_paths=["Software Engineer", "Systems Analyst"],
+            career_paths=[
+                CareerPathLLMItem(
+                    title="Software Engineer",
+                    detail="Membangun sistem dan arsitektur aplikasi perangkat lunak.",
+                ),
+                CareerPathLLMItem(
+                    title="Systems Analyst",
+                    detail="Menganalisis kebutuhan bisnis dan menerjemahkannya ke arsitektur IT.",
+                ),
+            ],
         )
         self.mock_adapter.fetch_preview_generation = AsyncMock(
             return_value=mock_llm_response
@@ -86,6 +108,13 @@ class TestPreviewAPIIntegration(unittest.TestCase):
         self.assertIn("career_paths", data)
         self.assertEqual(len(data["career_paths"]), 2)
         self.assertEqual(data["career_paths"][0]["major_node_preview_id"], data["id"])
+        self.assertEqual(data["career_paths"][0]["title"], "Software Engineer")
+        self.assertIn("detail", data["career_paths"][0])
+        self.assertEqual(
+            data["career_paths"][0]["detail"],
+            "Membangun sistem dan arsitektur aplikasi perangkat lunak.",
+        )
+
 
     def test_http_post_preview_invalid_uuid(self) -> None:
         response = self.client.post(

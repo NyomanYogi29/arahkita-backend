@@ -57,6 +57,11 @@ class MajorNodeCareerPath(BaseModel):
         max_length=50,
         description="Judul profesi karir (maksimal 2 kata)",
     )
+    detail: str = Field(
+        ...,
+        min_length=1,
+        description="Penjelasan komprehensif profesi karir (maksimal 100 kata)",
+    )
 
 
 class MajorNodePreview(BaseModel):
@@ -89,14 +94,29 @@ class MajorNodePreview(BaseModel):
     )
 
 
+class CareerPathLLMItem(BaseModel):
+    title: str = Field(
+        ...,
+        min_length=1,
+        max_length=50,
+        description="Nama profesi karir (maksimal 2 kata)",
+    )
+    detail: str = Field(
+        ...,
+        min_length=1,
+        description="Deskripsi tugas utama, skill, dan prospek karir (maksimal 100 kata)",
+    )
+
+
 class PreviewLLMResponse(BaseModel):
     preview: str = Field(
         ...,
         min_length=1,
         description="Teks rangkuman naratif dari LLM",
     )
-    career_paths: list[str] = Field(
+    career_paths: list[CareerPathLLMItem] = Field(
         default_factory=list,
-        description="Daftar rekomendasi karir terkait dari LLM",
+        description="Daftar rekomendasi karir terkait dari LLM beserta detailnya",
     )
+
 

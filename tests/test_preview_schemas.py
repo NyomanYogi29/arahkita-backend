@@ -76,8 +76,12 @@ class TestPreviewSchemas(unittest.TestCase):
             id="12345678-1234-4234-8234-123456789abc",
             major_node_preview_id="87654321-4321-4321-8321-cba987654321",
             title="Software Engineer",
+            detail="Merancang dan membangun aplikasi software berkualitas.",
         )
         self.assertEqual(path.title, "Software Engineer")
+        self.assertEqual(
+            path.detail, "Merancang dan membangun aplikasi software berkualitas."
+        )
 
     def test_invalid_major_node_career_path_uuid(self) -> None:
         with self.assertRaises(ValidationError):
@@ -85,6 +89,7 @@ class TestPreviewSchemas(unittest.TestCase):
                 id="invalid-uuid",
                 major_node_preview_id="87654321-4321-4321-8321-cba987654321",
                 title="Software Engineer",
+                detail="Detail karir",
             )
 
     def test_valid_major_node_preview(self) -> None:
@@ -98,11 +103,15 @@ class TestPreviewSchemas(unittest.TestCase):
                     id="33333333-3333-4333-8333-333333333333",
                     major_node_preview_id="11111111-1111-4111-8111-111111111111",
                     title="Software Engineer",
+                    detail="Membangun sistem dan aplikasi komputasi.",
                 )
             ],
         )
         self.assertEqual(preview.matching_percentage, 87)
         self.assertEqual(len(preview.career_paths), 1)
+        self.assertEqual(
+            preview.career_paths[0].detail, "Membangun sistem dan aplikasi komputasi."
+        )
 
     def test_invalid_major_node_preview_matching_percentage(self) -> None:
         with self.assertRaises(ValidationError):
@@ -116,17 +125,31 @@ class TestPreviewSchemas(unittest.TestCase):
                         id="33333333-3333-4333-8333-333333333333",
                         major_node_preview_id="11111111-1111-4111-8111-111111111111",
                         title="Software Engineer",
+                        detail="Detail karir",
                     )
                 ],
             )
 
     def test_valid_preview_llm_response(self) -> None:
+        from arahkita_backend.schemas.preview import CareerPathLLMItem
+
         raw = PreviewLLMResponse(
             preview="Rangkuman naratif",
-            career_paths=["Data Analyst", "Data Engineer"],
+            career_paths=[
+                CareerPathLLMItem(
+                    title="Data Analyst",
+                    detail="Menganalisis data tren industri.",
+                ),
+                CareerPathLLMItem(
+                    title="Data Engineer",
+                    detail="Membangun pipeline data skala besar.",
+                ),
+            ],
         )
         self.assertEqual(len(raw.career_paths), 2)
+        self.assertEqual(raw.career_paths[0].detail, "Menganalisis data tren industri.")
 
 
 if __name__ == "__main__":
     unittest.main()
+

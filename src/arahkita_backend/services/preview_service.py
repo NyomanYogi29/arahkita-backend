@@ -38,6 +38,19 @@ def sanitize_career_title(raw_title: str) -> str:
     return raw_title.strip()
 
 
+def sanitize_career_detail(raw_detail: str, max_words: int = 100) -> str:
+    """Memastikan teks detail profesi karir maksimal terdiri dari max_words kata."""
+    words = raw_detail.strip().split()
+    if not words:
+        return "Deskripsi karir belum tersedia."
+    if len(words) > max_words:
+        truncated = " ".join(words[:max_words])
+        if not truncated.endswith((".", "!", "?")):
+            truncated += "..."
+        return truncated
+    return raw_detail.strip()
+
+
 def sanitize_preview_text(raw_preview: str, max_words: int = 200) -> str:
     """Memastikan teks rangkuman evaluasi maksimal terdiri dari max_words kata."""
     words = raw_preview.strip().split()
@@ -60,9 +73,9 @@ async def generate_major_preview(
 
     Tahapan:
     1. Menghitung matching_percentage secara deterministik menggunakan formula terbobot.
-    2. Memanggil LLM untuk menyusun narasi evaluasi (maks. 200 kata) dan rekomendasi karir.
+    2. Memanggil LLM untuk menyusun narasi evaluasi (maks. 200 kata) dan rekomendasi karir beserta detailnya.
     3. Membuat UUID v4 untuk entity preview (relasi 1:1 ke major_node_id).
-    4. Merakit 1–4 entity career path (relasi 1:N ke major_node_preview_id) dengan judul maks 2 kata.
+    4. Merakit 1–4 entity career path (relasi 1:N ke major_node_preview_id) dengan judul maks 2 kata dan detail maks 100 kata.
     5. Mengembalikan MajorNodePreview nested siap simpan di IndexedDB (Dexie.js).
     """
     matching_percentage = calculate_matching_percentage(
@@ -80,22 +93,35 @@ async def generate_major_preview(
     sanitized_preview = sanitize_preview_text(llm_response.preview, max_words=200)
 
     # Filter dan batasi 1–4 pilihan karir
-    candidate_titles = [
-        title.strip() for title in llm_response.career_paths if title and title.strip()
+    candidate_items = [
+        item for item in llm_response.career_paths if item.title.strip()
     ]
-    if not candidate_titles:
-        candidate_titles = [request.major_name]
+    chosen_items = candidate_items[:4]
 
-    chosen_titles = candidate_titles[:4]
-
-    career_paths: list[MajorNodeCareerPath] = [
-        MajorNodeCareerPath(
-            id=generate_uuid(),
-            major_node_preview_id=preview_id,
-            title=sanitize_career_title(title),
+    if not chosen_items:
+        fallback_title = sanitize_career_title(request.major_name)
+        fallback_detail = (
+            f"Profesi dan praktisi di bidang {request.major_name} yang menerapkan "
+            "keilmuan untuk memecahkan masalah industri dan masyarakat."
         )
-        for title in chosen_titles
-    ]
+        career_paths = [
+            MajorNodeCareerPath(
+                id=generate_uuid(),
+                major_node_preview_id=preview_id,
+                title=fallback_title,
+                detail=fallback_detail,
+            )
+        ]
+    else:
+        career_paths = [
+            MajorNodeCareerPath(
+                id=generate_uuid(),
+                major_node_preview_id=preview_id,
+                title=sanitize_career_title(item.title),
+                detail=sanitize_career_detail(item.detail, max_words=100),
+            )
+            for item in chosen_items
+        ]
 
     return MajorNodePreview(
         id=preview_id,
@@ -104,3 +130,4 @@ async def generate_major_preview(
         matching_percentage=matching_percentage,
         career_paths=career_paths,
     )
+

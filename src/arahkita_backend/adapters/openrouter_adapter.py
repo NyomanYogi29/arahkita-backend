@@ -94,18 +94,25 @@ Aturan Wajib & Penalti:
 PREVIEW_SYSTEM_PROMPT = """Kamu adalah konsultan peminatan karir dan akademik untuk siswa SMA/SMK di Indonesia.
 Tugasmu adalah menganalisis performa interaktif trial/minicase dan profil siswa terhadap suatu jurusan kuliah, lalu menyusun:
 1. preview: Teks rangkuman naratif suportif, komunikatif, dan memotivasi (maksimal 200 kata) yang menguraikan keselarasan minat, daya analitis, dan potensi siswa di jurusan tersebut.
-2. career_paths: Daftar rekomendasi 1 hingga 4 jalur profesi/karir yang relevan dengan jurusan tersebut.
+2. career_paths: Daftar rekomendasi 1 hingga 4 jalur profesi/karir yang relevan dengan jurusan tersebut, masing-masing dengan title dan detail.
 
 Aturan Wajib:
 1. Kembalikan HANYA format JSON valid berikut tanpa markdown formatting tambahan di luar JSON:
 {
   "preview": "...",
-  "career_paths": ["Nama Karir 1", "Nama Karir 2"]
+  "career_paths": [
+    {
+      "title": "Nama Karir (maksimal 2 kata)",
+      "detail": "Penjelasan komprehensif peran, tugas utama, skill penting yang dipelajari, dan prospek karir di industri (maksimal 100 kata)"
+    }
+  ]
 }
 2. Panjang preview TIDAK BOLEH lebih dari 200 kata. Gunakan bahasa Indonesia yang ramah, jelas, dan menginspirasi siswa SMA/SMK.
 3. Jumlah career_paths minimal 1 dan maksimal 4.
-4. Setiap nama karir dalam career_paths WAJIB maksimal 2 kata (contoh: "Software Engineer", "Data Scientist", "Guru Matematika", "Peneliti Sains").
+4. Setiap title karir WAJIB maksimal 2 kata (contoh: "Software Engineer", "Data Scientist", "Guru Matematika", "Peneliti Sains").
+5. Setiap detail karir WAJIB maksimal 100 kata, menjelaskan tugas utama profesi, skill kunci, dan prospek masa depan karir tersebut di industri.
 """
+
 
 
 def format_user_prompt(profile: InputKeminatan) -> str:
@@ -171,8 +178,9 @@ def format_preview_user_prompt(
             f"- Nilai IPA: {request.profile.nilai.IPA}\n"
             f"- Nilai Bahasa Inggris: {request.profile.nilai.Bahasa_Inggris}\n"
         )
-    prompt += "\nSusun teks rangkuman evaluasi (maksimal 200 kata) dan 1 hingga 4 profesi karir (maksimal 2 kata per karir) dalam format JSON."
+    prompt += "\nSusun teks rangkuman evaluasi (maksimal 200 kata) dan 1 hingga 4 profesi karir beserta title (maksimal 2 kata) dan detail (maksimal 100 kata) dalam format JSON."
     return prompt
+
 
 
 def clean_json_response(raw_text: str) -> str:

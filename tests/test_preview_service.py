@@ -3,12 +3,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 from arahkita_backend.adapters.openrouter_adapter import OpenRouterAdapter
 from arahkita_backend.schemas.preview import (
+    CareerPathLLMItem,
     GeneratePreviewRequest,
     PreviewLLMResponse,
 )
 from arahkita_backend.services.preview_service import (
     calculate_matching_percentage,
     generate_major_preview,
+    sanitize_career_detail,
     sanitize_career_title,
     sanitize_preview_text,
 )
@@ -66,6 +68,19 @@ class TestPreviewService(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(sanitize_career_title("   "), "Praktisi Terkait")
 
+    def test_sanitize_career_detail(self) -> None:
+        short_detail = "Merancang arsitektur data dan sistem analisis informasi."
+        self.assertEqual(sanitize_career_detail(short_detail), short_detail)
+
+        # Detail lebih dari 100 kata
+        long_words = [f"detail{i}" for i in range(120)]
+        long_detail = " ".join(long_words)
+        sanitized = sanitize_career_detail(long_detail, max_words=100)
+        self.assertEqual(len(sanitized.rstrip(".").split()), 100)
+
+        # Detail kosong
+        self.assertEqual(sanitize_career_detail("   "), "Deskripsi karir belum tersedia.")
+
     def test_sanitize_preview_text(self) -> None:
         short_text = "Ini adalah rangkuman singkat."
         self.assertEqual(sanitize_preview_text(short_text), short_text)
@@ -81,11 +96,26 @@ class TestPreviewService(unittest.IsolatedAsyncioTestCase):
         mock_llm_response = PreviewLLMResponse(
             preview="Kamu memiliki potensi besar dalam problem solving dan pemrograman.",
             career_paths=[
-                "Software Engineer",
-                "Data Scientist",
-                "Cloud Architect Specialist",  # > 2 kata
-                "Cyber Security",
-                "Product Manager",  # item ke-5, harus dibatasi maks 4
+                CareerPathLLMItem(
+                    title="Software Engineer",
+                    detail="Merancang aplikasi sistem berbasis web dan mobile.",
+                ),
+                CareerPathLLMItem(
+                    title="Data Scientist",
+                    detail="Menganalisis pola data untuk pengambilan keputusan bisnis.",
+                ),
+                CareerPathLLMItem(
+                    title="Cloud Architect Specialist",  # > 2 kata
+                    detail="Merancang infrastruktur komputasi awan yang skalabel.",
+                ),
+                CareerPathLLMItem(
+                    title="Cyber Security",
+                    detail="Mengamankan jaringan dan integritas data perusahaan.",
+                ),
+                CareerPathLLMItem(
+                    title="Product Manager",  # item ke-5, harus dibatasi maks 4
+                    detail="Memimpin siklus hidup produk teknologi.",
+                ),
             ],
         )
         self.mock_adapter.fetch_preview_generation = AsyncMock(
@@ -120,18 +150,25 @@ class TestPreviewService(unittest.IsolatedAsyncioTestCase):
         # Verifikasi career paths: maksimal 4 item
         self.assertEqual(len(result.career_paths), 4)
 
-        # Verifikasi relasi 1:N career_path ke preview.id
+        # Verifikasi relasi 1:N career_path ke preview.id beserta atribut detail
         for path in result.career_paths:
             self.assertEqual(path.major_node_preview_id, result.id)
             self.assertRegex(
                 path.id,
                 r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
             )
-            # Maksimal 2 kata
+            # Maksimal 2 kata pada title
             self.assertLessEqual(len(path.title.split()), 2)
+            # Detail tidak boleh kosong dan maksimal 100 kata
+            self.assertTrue(len(path.detail) > 0)
+            self.assertLessEqual(len(path.detail.split()), 100)
 
         # Verifikasi judul yang tadinya 3 kata terpotong jadi 2 kata
         self.assertEqual(result.career_paths[2].title, "Cloud Architect")
+        self.assertEqual(
+            result.career_paths[0].detail,
+            "Merancang aplikasi sistem berbasis web dan mobile.",
+        )
 
     async def test_generate_major_preview_empty_career_fallback(self) -> None:
         major_node_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
@@ -157,10 +194,12 @@ class TestPreviewService(unittest.IsolatedAsyncioTestCase):
             adapter=self.mock_adapter,
         )
 
-        # Harus memiliki minimal 1 fallback career path
+        # Harus memiliki minimal 1 fallback career path dengan title dan detail
         self.assertGreaterEqual(len(result.career_paths), 1)
         self.assertEqual(result.career_paths[0].title, "Matematika Murni")
+        self.assertIn("Matematika Murni", result.career_paths[0].detail)
 
 
 if __name__ == "__main__":
     unittest.main()
+

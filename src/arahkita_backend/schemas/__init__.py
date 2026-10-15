@@ -14,6 +14,7 @@ from .minicase_node import (
     SubjectTrialLLMItem,
 )
 from .preview import (
+    CareerPathLLMItem,
     GeneratePreviewRequest,
     MajorNodeCareerPath,
     MajorNodePreview,
@@ -37,6 +38,8 @@ __all__ = [
     "GeneratePreviewRequest",
     "MajorNodeCareerPath",
     "MajorNodePreview",
+    "CareerPathLLMItem",
     "PreviewLLMResponse",
 ]
+
 

@@ -7,6 +7,7 @@ from .minicase_service import (
 from .preview_service import (
     calculate_matching_percentage,
     generate_major_preview,
+    sanitize_career_detail,
     sanitize_career_title,
     sanitize_preview_text,
 )
@@ -19,6 +20,8 @@ __all__ = [
     "calculate_matching_percentage",
     "generate_major_preview",
     "sanitize_career_title",
+    "sanitize_career_detail",
     "sanitize_preview_text",
 ]
+
 
