@@ -1,3 +1,8 @@
+from .cluster_service import (
+    ClusterSSEService,
+    build_cluster_and_major_nodes,
+    get_cluster_recommendations,
+)
 from .major_service import get_major_recommendations
 from .minicase_service import (
     assemble_nodes_from_subjects,
@@ -16,6 +21,9 @@ from .preview_service import (
 from .recommendation_result_service import calculate_recommendation_leaderboard
 
 __all__ = [
+    "ClusterSSEService",
+    "build_cluster_and_major_nodes",
+    "get_cluster_recommendations",
     "get_major_recommendations",
     "generate_minicases_tree",
     "stream_minicases_tree",

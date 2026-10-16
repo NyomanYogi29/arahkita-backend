@@ -11,8 +11,23 @@ def format_user_prompt(profile: InputKeminatan) -> str:
         f"Data Siswa:\n"
         f"- Minat: {profile.minat}\n"
         f"{scores_text}\n\n"
-        f"Berikan 2 hingga 6 rekomendasi nama jurusan kuliah dalam format JSON."
+        f"Berikan tepat 5 rekomendasi nama jurusan kuliah dalam format JSON."
     )
+
+
+def format_knowledge_cluster_user_prompt(
+    majors: list[str], profile: InputKeminatan | None = None
+) -> str:
+    """Memformat prompt untuk mengelompokkan 5 jurusan ke dalam rumpun keilmuan."""
+    majors_text = "\n".join(f"- {name}" for name in majors)
+    prompt = f"Daftar 5 Jurusan Kuliah:\n{majors_text}\n"
+    if profile is not None:
+        prompt += f"\nKonteks Minat Siswa: {profile.minat}\n"
+    prompt += (
+        "\nKelompokkan kelima jurusan di atas ke dalam 1 hingga 5 payung rumpun keilmuan "
+        "(knowledge cluster) dengan nama yang komunikatif dan ramah siswa dalam format JSON."
+    )
+    return prompt
 
 
 def format_minicases_user_prompt(
@@ -125,6 +140,7 @@ def format_subject_relevances_user_prompt(
 
 __all__ = [
     "format_user_prompt",
+    "format_knowledge_cluster_user_prompt",
     "format_minicases_user_prompt",
     "format_core_subjects_user_prompt",
     "format_single_subject_user_prompt",

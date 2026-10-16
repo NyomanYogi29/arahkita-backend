@@ -8,20 +8,14 @@ Dokumentasi resmi kontrak antarmuka API (*API Contract*) antara **ArahKita Backe
 1. [Konfigurasi Lingkungan & Base URL](#1-konfigurasi-lingkungan--base-url)
 2. [Format Standar Error Response](#2-format-standar-error-response)
 3. [Daftar Endpoint](#3-daftar-endpoint)
-   - [3.1. POST /api/v1/majors/recommend](#31-post-apiv1majorsrecommend)
-   - [3.2. POST /api/v1/recommendation-results](#32-post-apiv1recommendation-results)
-   - [3.3. POST /api/v1/minicases/generate](#33-post-apiv1minicasesgenerate)
-   - [3.4. POST /api/v1/minicases/evaluate-essay](#34-post-apiv1minicasesevaluate-essay)
-   - [3.5. POST /api/v1/preview/{major_node_id}](#35-post-apiv1previewmajor_node_id)
-4. [Contoh Implementasi Frontend (React + Vite)](#4-contoh-implementasi-frontend-react--vite)
-   - [4.1. File Service: src/services/majorService.js](#41-file-service-srcservicesmajorservicejs)
-   - [4.2. File Service: src/services/recommendationService.js](#42-file-service-srcservicesrecommendationservicejs)
-   - [4.3. File Service: src/services/minicaseService.js](#43-file-service-srcservicesminicaseservicejs)
-   - [4.4. Komponen Form Onboarding: src/components/OnboardingSurvey.jsx](#44-komponen-form-onboarding-srccomponentsonboardingsurveyjsx)
-   - [4.5. Komponen Leaderboard: src/components/RecommendationLeaderboard.jsx](#45-komponen-leaderboard-srccomponentsrecommendationleaderboardjsx)
-   - [4.6. Komponen Trial Esai: src/components/EssayTrialCard.jsx](#46-komponen-trial-esai-srccomponentsessaytrialcardjsx)
-   - [4.7. File Service: src/services/previewService.js](#47-file-service-srcservicespreviewservicejs)
-   - [4.8. Komponen Modal Preview: src/components/MajorPreviewModal.jsx](#48-komponen-modal-preview-srccomponentsmajorpreviewmodaljsx)
+   - [3.1. POST /api/v1/clusters/recommend-stream (Streaming SSE Onboarding)](#31-post-apiv1clustersrecommend-stream-streaming-sse-onboarding)
+   - [3.2. POST /api/v1/clusters/recommend (Fallback Sync Onboarding)](#32-post-apiv1clustersrecommend-fallback-sync-onboarding)
+   - [3.3. POST /api/v1/majors/recommend (Legacy Fallback)](#33-post-apiv1majorsrecommend-legacy-fallback)
+   - [3.4. POST /api/v1/recommendation-results](#34-post-apiv1recommendation-results)
+   - [3.5. POST /api/v1/minicases/generate](#35-post-apiv1minicasesgenerate)
+   - [3.6. POST /api/v1/minicases/generate-stream (Streaming SSE)](#36-post-apiv1minicasesgenerate-stream-streaming-sse)
+   - [3.7. POST /api/v1/minicases/evaluate-essay](#37-post-apiv1minicasesevaluate-essay)
+   - [3.8. POST /api/v1/preview/{major_node_id}](#38-post-apiv1previewmajor_node_id)
 
 ---
 
@@ -82,7 +76,224 @@ Terjadi jika OpenRouter/LLM mengalami gangguan atau output tidak dapat diparsing
 
 ---
 
-### 3.1. `POST /api/v1/majors/recommend`
+### 3.1. `POST /api/v1/clusters/recommend-stream` (Streaming SSE Onboarding)
+
+#### 🎯 Deskripsi
+Endpoint utama onboarding siswa dengan kapabilitas **Server-Sent Events (SSE)**.
+Mengalirkan progres evaluasi profil keminatan siswa secara real-time, lalu memancarkan node **Knowledge Cluster** (payung rumpun keilmuan, 1–5 rumpun) dan **Major Node** (5 jurusan rekomendasi dengan foreign key `cluster_id`) satu per satu ke frontend untuk disimpan langsung ke SQLite/IndexedDB (Dexie.js).
+
+##### 🏗️ Hirarki Graf:
+1. **Knowledge Cluster (Rumpun Keilmuan)**: Payung visual utama (misal: "Teknologi & Rekayasa", "Bisnis & Manajemen") yang menyambut siswa di dashboard. Memiliki atribut `major_group` berisi list ID `major_node`.
+2. **Major Node (Jurusan)**: Node anak di bawah rumpun yang mereferensikan `cluster_id`. Saat siswa mengklik salah satu rumpun, frontend langsung membuka jurusan-jurusan di bawahnya dari IndexedDB lokal tanpa perlu panggil API ulang.
+
+---
+
+#### 🌐 HTTP Request
+- **Method**: `POST`
+- **URL**: `${VITE_API_BASE_URL}/clusters/recommend-stream` (atau `https://api.nyomanyogi.my.id/api/v1/clusters/recommend-stream`)
+- **Headers**:
+  ```http
+  Content-Type: application/json
+  Accept: text/event-stream
+  ```
+
+---
+
+#### 📥 Request Body
+Berupa JSON object `InputKeminatan`:
+
+```json
+{
+  "minat": "Tertarik dengan teknologi, coding, artificial intelligence, dan robotika",
+  "nilai": {
+    "matematika": 90,
+    "ipa": 85,
+    "informatika": 92
+  }
+}
+```
+
+---
+
+#### 📤 SSE Response Envelope
+Format pesan Server-Sent Events dikirim per baris `data: <JSON>\n\n` dengan struktur konsisten:
+
+```json
+{
+  "type": "status" | "cluster" | "major" | "done" | "error",
+  "data": { ... }
+}
+```
+
+##### 1. Event `type: "status"` (Progress Tahapan)
+Memberikan umpan balik loading interaktif untuk UI:
+```json
+data: {"type": "status", "data": {"stage": "analyzing", "message": "Menganalisis keminatan dan nilai mata pelajaran siswa...", "progress": 15}}
+
+data: {"type": "status", "data": {"stage": "generating_majors", "message": "Menghasilkan 5 jurusan rekomendasi...", "progress": 45}}
+
+data: {"type": "status", "data": {"stage": "clustering", "message": "Mengelompokkan jurusan ke dalam rumpun keilmuan...", "progress": 75}}
+
+data: {"type": "status", "data": {"stage": "assembling", "message": "Merakit visualisasi graf rumpun keilmuan...", "progress": 90}}
+```
+
+##### 2. Event `type: "cluster"` (KnowledgeCluster Node)
+Dipancarkan untuk setiap rumpun keilmuan yang terbentuk (1–5 node):
+```json
+data: {"type": "cluster", "data": {"id": "11111111-1111-4111-8111-111111111111", "cluster_name": "Teknologi & Rekayasa", "circle_color": "#4F46E5", "major_group": ["aaaaaa11-1111-4111-8111-111111111111", "aaaaaa22-2222-4222-8222-222222222222"]}}
+```
+
+##### 3. Event `type: "major"` (MajorNode)
+Dipancarkan untuk setiap jurusan (5 node). Setiap node memiliki `cluster_id` yang terhubung ke induknya dan warna lingkaran mandiri:
+```json
+data: {"type": "major", "data": {"id": "aaaaaa11-1111-4111-8111-111111111111", "cluster_id": "11111111-1111-4111-8111-111111111111", "major_name": "Teknik Informatika", "circle_color": "#06B6D4", "child_id": null}}
+```
+
+##### 4. Event `type: "done"` (Sinyal Selesai)
+```json
+data: {"type": "done", "data": {"clusters_count": 2, "majors_count": 5, "message": "Rekomendasi rumpun keilmuan dan jurusan berhasil dibuat."}}
+```
+
+##### 5. Event `type: "error"` (Jika Terjadi Kendala)
+```json
+data: {"type": "error", "data": {"message": "Pesan kendala teknis..."}}
+```
+
+---
+
+#### 💻 Contoh Konsumsi Frontend (JavaScript / React + Dexie.js)
+```javascript
+import { db } from '../db'; // Dexie database instance
+
+export async function fetchClustersStream(profile, onProgress) {
+  const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/clusters/recommend-stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(profile),
+  });
+
+  if (!response.body) throw new Error('ReadableStream tidak didukung');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n\n');
+    buffer = lines.pop() || '';
+
+    for (const block of lines) {
+      const trimmed = block.trim();
+      if (!trimmed.startsWith('data: ')) continue;
+      const event = JSON.parse(trimmed.replace(/^data:\s*/, ''));
+
+      if (event.type === 'status') {
+        onProgress?.(event.data);
+      } else if (event.type === 'cluster') {
+        await db.knowledge_clusters.put(event.data);
+      } else if (event.type === 'major') {
+        await db.major_nodes.put(event.data);
+      } else if (event.type === 'done') {
+        console.log('Graf onboarding selesai disimpan ke IndexedDB!', event.data);
+      } else if (event.type === 'error') {
+        throw new Error(event.data.message);
+      }
+    }
+  }
+}
+```
+
+---
+
+### 3.2. `POST /api/v1/clusters/recommend` (Fallback Sync Onboarding)
+
+#### 🎯 Deskripsi
+Fallback endpoint berbasis synchronous JSON request-response standar (tanpa streaming) yang langsung mengembalikan bundle data lengkap rumpun keilmuan dan jurusannya.
+
+---
+
+#### 🌐 HTTP Request
+- **Method**: `POST`
+- **URL**: `${VITE_API_BASE_URL}/clusters/recommend`
+- **Headers**:
+  ```http
+  Content-Type: application/json
+  Accept: application/json
+  ```
+
+---
+
+#### 📤 Response Body (`200 OK`)
+```json
+{
+  "clusters": [
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "cluster_name": "Teknologi & Rekayasa",
+      "circle_color": "#4F46E5",
+      "major_group": [
+        "aaaaaa11-1111-4111-8111-111111111111",
+        "aaaaaa22-2222-4222-8222-222222222222",
+        "aaaaaa33-3333-4333-8333-333333333333"
+      ]
+    },
+    {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "cluster_name": "Bisnis & Manajemen",
+      "circle_color": "#D97706",
+      "major_group": [
+        "aaaaaa44-4444-4444-8444-444444444444",
+        "aaaaaa55-5555-4555-8555-555555555555"
+      ]
+    }
+  ],
+  "majors": [
+    {
+      "id": "aaaaaa11-1111-4111-8111-111111111111",
+      "cluster_id": "11111111-1111-4111-8111-111111111111",
+      "major_name": "Teknik Informatika",
+      "circle_color": "#06B6D4",
+      "child_id": null
+    },
+    {
+      "id": "aaaaaa22-2222-4222-8222-222222222222",
+      "cluster_id": "11111111-1111-4111-8111-111111111111",
+      "major_name": "Sistem Informasi",
+      "circle_color": "#10B981",
+      "child_id": null
+    },
+    {
+      "id": "aaaaaa33-3333-4333-8333-333333333333",
+      "cluster_id": "11111111-1111-4111-8111-111111111111",
+      "major_name": "Sains Data",
+      "circle_color": "#8B5CF6",
+      "child_id": null
+    },
+    {
+      "id": "aaaaaa44-4444-4444-8444-444444444444",
+      "cluster_id": "22222222-2222-4222-8222-222222222222",
+      "major_name": "Manajemen Bisnis",
+      "circle_color": "#EC4899",
+      "child_id": null
+    },
+    {
+      "id": "aaaaaa55-5555-4555-8555-555555555555",
+      "cluster_id": "22222222-2222-4222-8222-222222222222",
+      "major_name": "Akuntansi",
+      "circle_color": "#F59E0B",
+      "child_id": null
+    }
+  ]
+}
+```
+
+---
+
+### 3.3. `POST /api/v1/majors/recommend` (Legacy Fallback)
 
 #### 🎯 Deskripsi
 Menganalisis minat serta nilai mata pelajaran akhir siswa secara **dinamis** (contoh: `matematika`, `fisika`, `kimia`, `sosiologi`, `ekonomi`, `bahasa inggris`, dsb.), kemudian menghasilkan **2 hingga 6 pilihan rekomendasi jurusan kuliah** dalam bentuk visual node (`MajorNode`).
@@ -228,7 +439,7 @@ Mengembalikan **JSON Array** berisi 2 hingga 6 objek `MajorNode`.
 
 ---
 
-### 3.2. `POST /api/v1/recommendation-results`
+### 3.4. `POST /api/v1/recommendation-results`
 
 #### 🎯 Deskripsi
 Menyusun dan mengurutkan peringkat (*leaderboard*) rekomendasi jurusan siswa berdasarkan `matching_percentage` dari nilai tertinggi ke terendah secara *descending*.
@@ -445,7 +656,7 @@ Mengembalikan **JSON Array** berisi objek `MajorRecommendationResult` yang telah
 
 ---
 
-### 3.3. `POST /api/v1/minicases/generate`
+### 3.5. `POST /api/v1/minicases/generate`
 
 #### 🎯 Deskripsi
 Men-generate rantai pohon studi kasus (*minicase nodes*) interaktif berdasarkan jurusan kuliah yang dipilih oleh siswa di frontend.
@@ -631,9 +842,178 @@ Mengembalikan **JSON Array** berisi 6 hingga 10 objek `MinicaseNode` yang saling
 }
 ```
 
+### 3.6. `POST /api/v1/minicases/generate-stream` (Streaming Server-Sent Events)
+
+#### 🎯 Deskripsi
+Men-generate rantai node minicase secara **streaming real-time** menggunakan protokol **Server-Sent Events (SSE)** (`text/event-stream`).
+
+Endpoint ini dirancang khusus untuk mengoptimasi *User Experience (UX)* dan menghilangkan waktu tunggu/layar kosong (*blank loading*) yang biasanya terjadi saat LLM men-generate batch soal besar:
+1. **Mengapa Menggunakan Endpoint Streaming?**: Generasi 6–10 node trial secara sekuensial memakan waktu ~30–40 detik. Dengan endpoint ini, frontend menerima status berpikir (*AI thinking status*) secara live sejak detik ke-1.
+2. **Pengiriman Cepat Node Pertama (Early Interaction)**: Backend memparalelkan pembuatan studi kasus. Node mata kuliah pertama (**Node #2: MCQ** dan **Node #3: Esai**) selesai dan dikirim ke frontend dalam **~5–6 detik**. Pengguna dapat langsung berinteraksi dan membaca soal pertama, sementara node berikutnya (#4 s.d. #11) terus di-stream di latar belakang tanpa mengganggu pengerjaan.
+3. **Format Envelope Standar**: Setiap potongan event dikirim dalam format JSON envelope tunggal dengan field `type` (`status`, `node`, `done`, `error`) dan payload `data`.
+4. **Offline-Ready & Idempoten**: Data yang dikirim pada event `node` adalah objek `MinicaseNode` utuh yang siap disimpan langsung ke SQLite/IndexedDB browser (`db.minicases.put(event.data)`).
+
 ---
 
-### 3.4. `POST /api/v1/minicases/evaluate-essay`
+#### 🌐 HTTP Request
+- **Method**: `POST`
+- **URL**: `${VITE_API_BASE_URL}/minicases/generate-stream` (atau `https://api.nyomanyogi.my.id/api/v1/minicases/generate-stream`)
+- **Headers**:
+  ```http
+  Content-Type: application/json
+  Accept: text/event-stream
+  ```
+
+---
+
+#### 📥 Request Body
+Menggunakan payload yang **sama persis** dengan endpoint non-streaming `POST /api/v1/minicases/generate` (`GenerateMinicasesRequest`):
+
+| Field | Tipe Data | Wajib | Keterangan & Validasi |
+| :--- | :--- | :--- | :--- |
+| `major_id` | `string` | Ya | UUID v4 node jurusan (`major_node`) yang dipilih siswa. |
+| `major_name` | `string` | Ya | Nama resmi jurusan kuliah (minimal 1 karakter). |
+| `circle_color` | `string` | Ya | Kode hex warna lingkaran jurusan induk (contoh: `"#4F46E5"`). |
+| `profile` | `object` (`InputKeminatan`) atau `null` | Tidak | Profil minat dan nilai siswa dari onboarding (opsional). |
+
+##### Contoh Request Payload:
+```json
+{
+  "major_id": "2c4059b4-c692-4429-a1dc-56e004ba5297",
+  "major_name": "Teknik Informatika",
+  "circle_color": "#4F46E5",
+  "profile": {
+    "minat": "Saya suka pemrograman web, robotika, dan analisis data",
+    "nilai": {
+      "matematika": 88,
+      "fisika": 85,
+      "bahasa inggris": 90
+    }
+  }
+}
+```
+
+---
+
+#### 📤 Response Streaming Body (`200 OK`, `text/event-stream`)
+Backend mengembalikan stream data persisten dengan header:
+- `Content-Type: text/event-stream`
+- `Cache-Control: no-cache`
+- `Connection: keep-alive`
+- `X-Accel-Buffering: no`
+
+Setiap event dikirim dalam format standar Server-Sent Events:
+```http
+data: {"type": "<status|node|done|error>", "data": <payload>}
+
+```
+
+##### 1. Event `type: "status"` (Pembaruan Progres / AI Thinking)
+Dikirim berkala saat backend menganalisis kurikulum atau merancang studi kasus mata kuliah.
+- **Payload `data`**:
+  - `stage` (`string`): Kode tahapan (`"analyzing"`, `"curriculum_ready"`, `"generating_case"`).
+  - `message` (`string`): Teks ramah pengguna untuk ditampilkan pada progress bar / animasi thinking.
+  - `progress` (`integer`): Persentase perkiraan progres (0–100).
+  - `subjects` (`array[string]`, opsional): Daftar nama mata kuliah dasar yang ditemukan.
+
+##### 2. Event `type: "node"` (Pengiriman Objek MinicaseNode)
+Dikirim setiap kali satu node soal berhasil dirakit secara lengkap.
+- **Payload `data`**: Objek `MinicaseNode` lengkap yang memuat `id`, `parent_id`, `minicase_number`, `minicase_title`, `subject_name`, `node_type`, `question`, `options`, `correct_answer`, `evaluation_hint`, `is_parent`, `circle_color`, `is_done`, dan `child_id`.
+
+##### 3. Event `type: "done"` (Sinyal Selesai)
+Dikirim saat seluruh rangkaian minicase selesai dirakit dan di-stream.
+- **Payload `data`**:
+  - `total_nodes` (`integer`): Jumlah total node yang berhasil dirakit (misal: 6).
+  - `status` (`string`): `"completed"`.
+  - `message` (`string`): `"Seluruh studi kasus berhasil digenerasi."`.
+
+##### 4. Event `type: "error"` (Informasi Kegagalan)
+Dikirim jika terjadi kendala kritis pada koneksi OpenRouter atau validasi kurikulum.
+- **Payload `data`**:
+  - `message` (`string`): Rincian pesan kesalahan.
+
+---
+
+#### 📋 Contoh Aliran Data Real-time (Raw Stream Chunks)
+
+```http
+data: {"type":"status","data":{"stage":"analyzing","message":"Menganalisis kurikulum dasar Teknik Informatika...","progress":10}}
+
+data: {"type":"status","data":{"stage":"curriculum_ready","message":"Ditemukan 3 mata kuliah dasar inti.","subjects":["Dasar Pemrograman","Basis Data","Jaringan Komputer"],"progress":25}}
+
+data: {"type":"status","data":{"stage":"generating_case","message":"Menyusun studi kasus #1: Dasar Pemrograman...","progress":46}}
+
+data: {"type":"node","data":{"id":"e1f2a3b4-5c6d-7e8f-9a0b-1c2d3e4f5a6b","parent_id":"2c4059b4-c692-4429-a1dc-56e004ba5297","minicase_number":2,"minicase_title":"Logika Coding","subject_name":"Dasar Pemrograman","node_type":"multiple_choice","question":"Sebuah toko ingin memberikan diskon 10% jika total belanja minimal Rp100.000 atau pelanggan memiliki kartu member. Manakah ekspresi logika pemrograman yang tepat?","options":["total >= 100000 AND has_member == True","total >= 100000 OR has_member == True","total > 100000 AND has_member == False","total == 100000 OR has_member == False"],"correct_answer":"total >= 100000 OR has_member == True","evaluation_hint":null,"is_parent":true,"circle_color":"#4F46E5","is_done":false,"child_id":"f2a3b4c5-6d7e-8f9a-0b1c-2d3e4f5a6b7c"}}
+
+data: {"type":"node","data":{"id":"f2a3b4c5-6d7e-8f9a-0b1c-2d3e4f5a6b7c","parent_id":"2c4059b4-c692-4429-a1dc-56e004ba5297","minicase_number":3,"minicase_title":"Debugging Kritis","subject_name":"Dasar Pemrograman","node_type":"essay","question":"Aplikasi e-commerce yang kamu kembangkan crash 30 menit sebelum peluncuran. Apa tindakan analisismu?","options":null,"correct_answer":null,"evaluation_hint":"Menilai ketenangan dan kemampuan isolasi bug.","is_parent":true,"circle_color":"#4F46E5","is_done":false,"child_id":"a3b4c5d6-7e8f-9a0b-1c2d-3e4f5a6b7c8d"}}
+
+data: {"type":"status","data":{"stage":"generating_case","message":"Menyusun studi kasus #2: Basis Data...","progress":68}}
+
+data: {"type":"node","data":{"id":"a3b4c5d6-7e8f-9a0b-1c2d-3e4f5a6b7c8d","parent_id":"2c4059b4-c692-4429-a1dc-56e004ba5297","minicase_number":4,"minicase_title":"Query SQL","subject_name":"Basis Data","node_type":"multiple_choice","question":"Perintah SQL untuk menampilkan data?","options":["SELECT","UPDATE","DELETE","INSERT"],"correct_answer":"SELECT","evaluation_hint":null,"is_parent":true,"circle_color":"#4F46E5","is_done":false,"child_id":"b4c5d6e7-8f9a-0b1c-2d3e-4f5a6b7c8d9e"}}
+
+data: {"type":"node","data":{"id":"b4c5d6e7-8f9a-0b1c-2d3e-4f5a6b7c8d9e","parent_id":"2c4059b4-c692-4429-a1dc-56e004ba5297","minicase_number":5,"minicase_title":"Normalisasi Data","subject_name":"Basis Data","node_type":"essay","question":"Mengapa data redundan berbahaya?","options":null,"correct_answer":null,"evaluation_hint":"Menilai pemahaman anomali data.","is_parent":true,"circle_color":"#4F46E5","is_done":false,"child_id":"c5d6e7f8-9a0b-1c2d-3e4f-5a6b7c8d9e0f"}}
+
+data: {"type":"done","data":{"total_nodes":6,"status":"completed","message":"Seluruh studi kasus berhasil digenerasi."}}
+```
+
+---
+
+#### 💻 Contoh Pola Konsumsi di Frontend (JavaScript / Fetch Streaming)
+
+```javascript
+export async function streamMinicasesTree(payload, { onStatus, onNode, onDone, onError }) {
+  const response = await fetch(`${BASE_URL}/minicases/generate-stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP Error: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split('\n\n');
+    buffer = chunks.pop() || '';
+
+    for (const chunk of chunks) {
+      const line = chunk.trim();
+      if (!line.startsWith('data: ')) continue;
+
+      const event = JSON.parse(line.slice(6));
+      switch (event.type) {
+        case 'status':
+          onStatus?.(event.data);
+          break;
+        case 'node':
+          onNode?.(event.data); // Simpan langsung ke IndexedDB: await db.minicases.put(event.data)
+          break;
+        case 'done':
+          onDone?.(event.data);
+          break;
+        case 'error':
+          onError?.(event.data);
+          break;
+      }
+    }
+  }
+}
+```
+
+---
+
+### 3.7. `POST /api/v1/minicases/evaluate-essay`
 
 #### 🎯 Deskripsi
 Mengevaluasi jawaban esai reflektif siswa terhadap suatu studi kasus secara *real-time* menggunakan AI psikometrik.
@@ -758,7 +1138,7 @@ Misal siswa mengirim `"user_answer": "gak tau malas mikir"`:
 
 ---
 
-### 3.5. `POST /api/v1/preview/{major_node_id}`
+### 3.8. `POST /api/v1/preview/{major_node_id}`
 
 #### 🎯 Deskripsi
 Menyusun dan mengembalikan rangkuman evaluasi komprehensif (*preview naratif*) beserta **1 hingga 4 rekomendasi jalur profesi/karir nyata** ketika siswa telah menyelesaikan seluruh trial interaktif pada suatu jurusan.
@@ -914,1005 +1294,3 @@ Mengembalikan JSON object berupa `MajorNodePreview` lengkap dengan relasi array 
   "detail": "Gagal mem-parsing preview dari LLM: ..."
 }
 ```
-
----
-
-## 4. Contoh Implementasi Frontend (React + Vite)
-
-### 4.1. File Service: `src/services/majorService.js`
-
-```javascript
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://api.nyomanyogi.my.id/api/v1';
-
-/**
- * Mengirim survei minat dan nilai siswa untuk mendapatkan rekomendasi jurusan kuliah.
- * 
- * @param {Object} payload
- * @param {string} payload.minat - Deskripsi minat siswa
- * @param {Object.<string, number>} payload.nilai - Objek nilai mata pelajaran dinamis (minimal 3, maksimal 10 mapel, nilai 0-100)
- * @returns {Promise<Array<{ id: string, major_name: string, circle_color: string, child_id: string|null }>>}
- */
-export async function getMajorRecommendations(payload) {
-  try {
-    const response = await fetch(`${BASE_URL}/majors/recommend`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
-      
-      if (response.status === 422) {
-        const errorMessages = errorData?.detail
-          ? errorData.detail.map((err) => `${err.loc.join('.')}: ${err.msg}`).join(', ')
-          : 'Validasi form tidak valid.';
-        throw new Error(`Validasi Gagal: ${errorMessages}`);
-      }
-
-      const serverMessage = errorData?.detail || 'Terjadi kesalahan pada server backend.';
-      throw new Error(`Error (${response.status}): ${serverMessage}`);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('Gagal mengambil rekomendasi jurusan:', error);
-    throw error;
-  }
-}
-```
-
----
-
-### 4.2. File Service: `src/services/recommendationService.js`
-
-```javascript
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://api.nyomanyogi.my.id/api/v1';
-
-/**
- * Mengirim data major_nodes, previews yang telah diselesaikan, dan profil keminatan
- * untuk mendapatkan leaderboard rekomendasi jurusan beserta badge mata pelajaran relevan.
- * 
- * @param {Object} payload
- * @param {Array<Object>} payload.major_nodes - Daftar node jurusan dari local storage/state
- * @param {Array<Object>} payload.previews - Daftar preview hasil trial yang telah diselesaikan
- * @param {Object|null} [payload.profile] - Profil keminatan dan nilai awal siswa (opsional)
- * @returns {Promise<Array<Object>>} Daftar MajorRecommendationResult terurut descending
- */
-export async function getRecommendationResults(payload) {
-  try {
-    const response = await fetch(`${BASE_URL}/recommendation-results`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
-
-      if (response.status === 422) {
-        const errorMessages = errorData?.detail
-          ? errorData.detail.map((err) => `${err.loc.join('.')}: ${err.msg}`).join(', ')
-          : 'Format payload request tidak valid.';
-        throw new Error(`Validasi Gagal: ${errorMessages}`);
-      }
-
-      const serverMessage = errorData?.detail || 'Terjadi kesalahan pada server backend.';
-      throw new Error(`Error (${response.status}): ${serverMessage}`);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('Gagal mengambil leaderboard rekomendasi:', error);
-    throw error;
-  }
-}
-```
-
----
-
-### 4.3. File Service: `src/services/minicaseService.js`
-
-```javascript
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://api.nyomanyogi.my.id/api/v1';
-
-/**
- * Men-generate pohon studi kasus (minicase nodes) untuk jurusan yang dipilih siswa.
- * Nomor node dimulai dari 2 s.d. 11 (nomor 1 dialokasikan untuk rules pengerjaan di frontend).
- * 
- * @param {Object} payload
- * @param {string} payload.major_id - UUID v4 node jurusan yang dipilih siswa
- * @param {string} payload.major_name - Nama jurusan kuliah (contoh: "Teknik Informatika")
- * @param {string} payload.circle_color - Kode hex warna lingkaran (contoh: "#4F46E5")
- * @param {Object|null} [payload.profile] - Profil keminatan & nilai siswa (opsional untuk personalisasi)
- * @returns {Promise<Array<Object>>} Daftar MinicaseNode terurut sekuensial
- */
-export async function generateMinicases(payload) {
-  try {
-    const response = await fetch(`${BASE_URL}/minicases/generate`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
-
-      if (response.status === 422) {
-        const errorMessages = errorData?.detail
-          ? errorData.detail.map((err) => `${err.loc.join('.')}: ${err.msg}`).join(', ')
-          : 'Format request pembuatan minicase tidak valid.';
-        throw new Error(`Validasi Gagal: ${errorMessages}`);
-      }
-
-      const serverMessage = errorData?.detail || 'Terjadi kesalahan pada server saat membuat minicase.';
-      throw new Error(`Error (${response.status}): ${serverMessage}`);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('Gagal men-generate minicases:', error);
-    throw error;
-  }
-}
-
-/**
- * Mengevaluasi jawaban esai reflektif siswa secara real-time menggunakan AI.
- * 
- * @param {Object} payload
- * @param {string} payload.question - Pertanyaan studi kasus (dari node.question)
- * @param {string} payload.evaluation_hint - Rubrik pedoman penilaian (dari node.evaluation_hint)
- * @param {string} payload.user_answer - Teks jawaban esai siswa
- * @param {string|null} [payload.minicase_id] - UUID v4 node minicase (opsional)
- * @returns {Promise<{ analytical_fit: number, interest_signal: number, is_serious_attempt: boolean }>}
- */
-export async function evaluateEssayAnswer(payload) {
-  try {
-    const response = await fetch(`${BASE_URL}/minicases/evaluate-essay`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
-
-      if (response.status === 422) {
-        const errorMessages = errorData?.detail
-          ? errorData.detail.map((err) => `${err.loc.join('.')}: ${err.msg}`).join(', ')
-          : 'Format request evaluasi esai tidak valid.';
-        throw new Error(`Validasi Gagal: ${errorMessages}`);
-      }
-
-      const serverMessage = errorData?.detail || 'Terjadi kesalahan pada server saat mengevaluasi esai.';
-      throw new Error(`Error (${response.status}): ${serverMessage}`);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('Gagal mengevaluasi esai:', error);
-    throw error;
-  }
-}
-```
-
----
-
-### 4.4. Komponen Form Onboarding: `src/components/OnboardingSurvey.jsx`
-
-```jsx
-import React, { useState } from 'react';
-import { getMajorRecommendations } from '../services/majorService';
-
-export default function OnboardingSurvey({ onRecommendationsReceived }) {
-  const [minat, setMinat] = useState('');
-  // Siswa memasukkan minimal 3 dan maksimal 10 mata pelajaran
-  const [subjects, setSubjects] = useState([
-    { name: 'Matematika', score: 85 },
-    { name: 'Fisika', score: 80 },
-    { name: 'Bahasa Inggris', score: 88 },
-  ]);
-  const [newSubjectName, setNewSubjectName] = useState('');
-  const [newSubjectScore, setNewSubjectScore] = useState(80);
-
-  const [isLoading, setIsLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState(null);
-
-  const handleAddSubject = () => {
-    if (!newSubjectName.trim()) return;
-    if (subjects.length >= 10) {
-      setErrorMessage('Maksimal hanya boleh menambahkan 10 mata pelajaran.');
-      return;
-    }
-    const cleanName = newSubjectName.trim();
-    if (subjects.some((s) => s.name.toLowerCase() === cleanName.toLowerCase())) {
-      setErrorMessage(`Mata pelajaran '${cleanName}' sudah ada di daftar.`);
-      return;
-    }
-
-    setSubjects([...subjects, { name: cleanName, score: Number(newSubjectScore) }]);
-    setNewSubjectName('');
-    setNewSubjectScore(80);
-    setErrorMessage(null);
-  };
-
-  const handleRemoveSubject = (index) => {
-    if (subjects.length <= 3) {
-      setErrorMessage('Minimal harus mempertahankan 3 mata pelajaran.');
-      return;
-    }
-    setSubjects(subjects.filter((_, i) => i !== index));
-    setErrorMessage(null);
-  };
-
-  const handleScoreChange = (index, newScore) => {
-    const updated = [...subjects];
-    updated[index].score = Number(newScore);
-    setSubjects(updated);
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (subjects.length < 3) {
-      setErrorMessage('Minimal harus mengisi 3 mata pelajaran.');
-      return;
-    }
-
-    setIsLoading(true);
-    setErrorMessage(null);
-
-    // Bentuk key-value object: {"matematika": 85, "fisika": 80, ...}
-    const nilaiObj = {};
-    for (const s of subjects) {
-      nilaiObj[s.name] = Number(s.score);
-    }
-
-    const payload = {
-      minat: minat.trim(),
-      nilai: nilaiObj,
-    };
-
-    try {
-      const recommendations = await getMajorRecommendations(payload);
-      // Simpan rekomendasi ke state parent atau IndexedDB lokal frontend
-      if (onRecommendationsReceived) {
-        onRecommendationsReceived(recommendations);
-      }
-    } catch (err) {
-      setErrorMessage(err.message || 'Gagal terhubung ke server.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  return (
-    <form onSubmit={handleSubmit} style={{ maxWidth: 500, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <h3>Survei Keminatan & Nilai Mata Pelajaran</h3>
-
-      {errorMessage && (
-        <div style={{ color: '#EF4444', backgroundColor: '#FEE2E2', padding: 10, borderRadius: 6, fontSize: '0.9rem' }}>
-          {errorMessage}
-        </div>
-      )}
-
-      <label>
-        <strong>Minat / Bakat / Ketertarikan:</strong>
-        <textarea
-          value={minat}
-          onChange={(e) => setMinat(e.target.value)}
-          placeholder="Ceritakan minat, kegiatan favorit, atau topik yang ingin kamu tekuni..."
-          required
-          rows={3}
-          style={{ width: '100%', marginTop: 4, padding: 8, borderRadius: 6, border: '1px solid #D1D5DB' }}
-        />
-      </label>
-
-      <div>
-        <strong>Daftar Nilai Mata Pelajaran (3 - 10 Mapel):</strong>
-        <p style={{ margin: '4px 0 10px 0', fontSize: '0.85rem', color: '#6B7280' }}>
-          Masukkan mata pelajaran yang paling kamu percaya diri dengan nilainya (skala 0 - 100).
-        </p>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {subjects.map((subj, index) => (
-            <div key={index} style={{ display: 'flex', alignItems: 'center', gap: 8, backgroundColor: '#F9FAFB', padding: 8, borderRadius: 6 }}>
-              <span style={{ flex: 1, fontWeight: 500 }}>{subj.name}</span>
-              <input
-                type="number"
-                min="0"
-                max="100"
-                value={subj.score}
-                onChange={(e) => handleScoreChange(index, e.target.value)}
-                required
-                style={{ width: 70, padding: 4, textAlign: 'center' }}
-              />
-              <button
-                type="button"
-                onClick={() => handleRemoveSubject(index)}
-                disabled={subjects.length <= 3}
-                style={{ background: 'none', border: 'none', color: '#EF4444', cursor: subjects.length <= 3 ? 'not-allowed' : 'pointer' }}
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-        </div>
-
-        {/* Form Tambah Mapel Baru */}
-        {subjects.length < 10 && (
-          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-            <input
-              type="text"
-              placeholder="Mapel baru (misal: Sosiologi, Kimia)..."
-              value={newSubjectName}
-              onChange={(e) => setNewSubjectName(e.target.value)}
-              style={{ flex: 1, padding: 6, borderRadius: 6, border: '1px solid #D1D5DB' }}
-            />
-            <input
-              type="number"
-              min="0"
-              max="100"
-              value={newSubjectScore}
-              onChange={(e) => setNewSubjectScore(e.target.value)}
-              style={{ width: 70, padding: 6, textAlign: 'center', borderRadius: 6, border: '1px solid #D1D5DB' }}
-            />
-            <button
-              type="button"
-              onClick={handleAddSubject}
-              style={{ padding: '6px 12px', backgroundColor: '#E5E7EB', border: 'none', borderRadius: 6, cursor: 'pointer' }}
-            >
-              + Tambah
-            </button>
-          </div>
-        )}
-      </div>
-
-      <button
-        type="submit"
-        disabled={isLoading || subjects.length < 3}
-        style={{
-          marginTop: 12,
-          padding: 12,
-          backgroundColor: '#4F46E5',
-          color: '#FFFFFF',
-          border: 'none',
-          borderRadius: 8,
-          fontWeight: 'bold',
-          cursor: isLoading ? 'not-allowed' : 'pointer',
-        }}
-      >
-        {isLoading ? 'Menganalisis Keminatan AI...' : 'Dapatkan Rekomendasi Jurusan 🚀'}
-      </button>
-    </form>
-  );
-}
-```
-
----
-
-### 4.5. Komponen Leaderboard: `src/components/RecommendationLeaderboard.jsx`
-
-```jsx
-import React, { useEffect, useState } from 'react';
-import { getRecommendationResults } from '../services/recommendationService';
-
-export default function RecommendationLeaderboard({ majorNodes, previews, profile }) {
-  const [leaderboard, setLeaderboard] = useState([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    async function fetchLeaderboard() {
-      if (!majorNodes || majorNodes.length === 0) return;
-
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const results = await getRecommendationResults({
-          major_nodes: majorNodes,
-          previews: previews || [],
-          profile: profile || null,
-        });
-        setLeaderboard(results);
-      } catch (err) {
-        setError(err.message || 'Gagal memuat leaderboard.');
-      } finally {
-        setIsLoading(false);
-      }
-    }
-
-    fetchLeaderboard();
-  }, [majorNodes, previews, profile]);
-
-  if (isLoading) {
-    return <p>Menyusun peringkat rekomendasi jurusan...</p>;
-  }
-
-  if (error) {
-    return <p style={{ color: '#EF4444' }}>{error}</p>;
-  }
-
-  return (
-    <div style={{ maxWidth: 600, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <h2>🏆 Leaderboard Rekomendasi Jurusan</h2>
-      {leaderboard.map((item, index) => (
-        <div
-          key={item.id}
-          style={{
-            border: '1px solid #E5E7EB',
-            borderRadius: 8,
-            padding: 16,
-            borderLeft: `6px solid ${item.circle_color}`,
-            backgroundColor: item.is_completed ? '#FFFFFF' : '#F9FAFB',
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h4 style={{ margin: 0 }}>
-              #{index + 1} {item.major_name}
-            </h4>
-            <span
-              style={{
-                fontWeight: 'bold',
-                fontSize: '1.1rem',
-                color: item.is_completed ? item.circle_color : '#9CA3AF',
-              }}
-            >
-              {item.is_completed ? `${item.matching_percentage}%` : 'Belum Trial'}
-            </span>
-          </div>
-
-          {/* Badge Relevansi Mata Pelajaran SMA/SMK */}
-          {item.subject_relevances && item.subject_relevances.length > 0 && (
-            <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '0.8rem', color: '#6B7280' }}>Mapel Relevan:</span>
-              {item.subject_relevances.map((sr) => (
-                <span
-                  key={sr.id}
-                  style={{
-                    backgroundColor: '#EEF2FF',
-                    color: '#4F46E5',
-                    padding: '2px 8px',
-                    borderRadius: 12,
-                    fontSize: '0.75rem',
-                    fontWeight: 600,
-                  }}
-                >
-                  {sr.subject_name}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {/* Narasi Preview & Karir jika sudah selesai */}
-          {item.preview && (
-            <div style={{ marginTop: 12, fontSize: '0.9rem', color: '#374151' }}>
-              <p style={{ margin: '0 0 8px 0' }}>{item.preview.preview}</p>
-              {item.preview.career_paths?.length > 0 && (
-                <div>
-                  <strong>Jalur Karir: </strong>
-                  {item.preview.career_paths.map((cp) => cp.title).join(', ')}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-```
-
----
-
-### 4.6. Komponen Trial Esai: `src/components/EssayTrialCard.jsx`
-
-Komponen interaktif untuk menampilkan studi kasus esai reflektif, memanggil API evaluasi esai, menampilkan feedback skor analitis & minat, serta menangani guardrail jika jawaban terindikasi asal-asalan:
-
-```jsx
-import React, { useState } from 'react';
-import { evaluateEssayAnswer } from '../services/minicaseService';
-
-export default function EssayTrialCard({ node, onCompleted }) {
-  const [userAnswer, setUserAnswer] = useState(node.user_answer || '');
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [evalResult, setEvalResult] = useState(
-    node.is_done ? { analytical_fit: node.analytical_fit, interest_signal: node.interest_signal } : null
-  );
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!userAnswer.trim()) return;
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const result = await evaluateEssayAnswer({
-        question: node.question,
-        evaluation_hint: node.evaluation_hint,
-        user_answer: userAnswer.trim(),
-        minicase_id: node.id,
-      });
-
-      setEvalResult(result);
-
-      // Teruskan hasil ke parent component untuk disimpan ke IndexedDB
-      if (onCompleted) {
-        onCompleted({
-          ...node,
-          user_answer: userAnswer.trim(),
-          analytical_fit: result.analytical_fit,
-          interest_signal: result.interest_signal,
-          is_serious_attempt: result.is_serious_attempt,
-          is_done: true,
-        });
-      }
-    } catch (err) {
-      setError(err.message || 'Gagal mengevaluasi esai.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  return (
-    <div style={{ border: '1px solid #E5E7EB', borderRadius: 12, padding: 20, backgroundColor: '#FFFFFF', maxWidth: 600, margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: node.circle_color }}>
-          Node #{node.minicase_number} • {node.subject_name}
-        </span>
-        <span style={{ fontSize: '0.75rem', backgroundColor: '#FEF3C7', color: '#D97706', padding: '2px 8px', borderRadius: 8 }}>
-          Esai Reflektif
-        </span>
-      </div>
-
-      <h3 style={{ margin: '0 0 10px 0', fontSize: '1.2rem' }}>{node.minicase_title}</h3>
-      <p style={{ color: '#374151', lineHeight: 1.5, marginBottom: 16 }}>{node.question}</p>
-
-      {error && (
-        <div style={{ backgroundColor: '#FEE2E2', color: '#DC2626', padding: 8, borderRadius: 6, marginBottom: 12 }}>
-          {error}
-        </div>
-      )}
-
-      {/* Tampilan Skor Evaluasi setelah selesai */}
-      {evalResult && (
-        <div style={{ backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 8, padding: 12, marginBottom: 16 }}>
-          <h4 style={{ margin: '0 0 8px 0', color: '#166534' }}>✨ Hasil Evaluasi AI:</h4>
-          <div style={{ display: 'flex', gap: 16 }}>
-            <span>🧠 Daya Analitis: <strong>{evalResult.analytical_fit} / 5</strong></span>
-            <span>🔥 Sinyal Minat: <strong>{evalResult.interest_signal} / 5</strong></span>
-          </div>
-          {evalResult.is_serious_attempt === false && (
-            <p style={{ margin: '8px 0 0 0', color: '#B45309', fontSize: '0.85rem' }}>
-              ⚠️ AI mendeteksi jawaban ini belum menunjukkan usaha yang optimal. Coba jawab lebih mendalam di trial berikutnya agar minatmu terpetakan akurat.
-            </p>
-          )}
-        </div>
-      )}
-
-      <form onSubmit={handleSubmit}>
-        <textarea
-          rows={4}
-          value={userAnswer}
-          onChange={(e) => setUserAnswer(e.target.value)}
-          placeholder="Ceritakan pandangan dan solusimu secara terstruktur..."
-          required
-          disabled={isLoading || node.is_done}
-          style={{ width: '100%', padding: 10, borderRadius: 6, border: '1px solid #D1D5DB', boxSizing: 'border-box' }}
-        />
-
-        {!node.is_done && (
-          <button
-            type="submit"
-            disabled={isLoading || !userAnswer.trim()}
-            style={{
-              marginTop: 12,
-              padding: '10px 20px',
-              backgroundColor: node.circle_color || '#4F46E5',
-              color: '#FFFFFF',
-              border: 'none',
-              borderRadius: 6,
-              cursor: isLoading ? 'not-allowed' : 'pointer',
-              fontWeight: 'bold',
-            }}
-          >
-            {isLoading ? 'Mengevaluasi Jawaban AI...' : 'Kirim Jawaban & Lanjut'}
-          </button>
-        )}
-      </form>
-    </div>
-  );
-}
-```
-
----
-
-### 4.7. File Service: `src/services/previewService.js`
-
-File service untuk memanggil endpoint evaluasi akhir (`POST /api/v1/preview/{major_node_id}`) guna mendapatkan narasi rangkuman AI, persentase kecocokan terbobot, dan rekomendasi jalur karir:
-
-```javascript
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://api.nyomanyogi.my.id/api/v1';
-
-/**
- * Mengirimkan ringkasan agregasi metrik trial siswa pada suatu jurusan untuk
- * mendapatkan narasi evaluasi kecocokan AI, persentase matching deterministik,
- * dan daftar rekomendasi jalur karir.
- *
- * @param {string} majorNodeId - UUID v4 node jurusan yang dievaluasi
- * @param {Object} payload
- * @param {string} payload.major_name - Nama jurusan kuliah (contoh: "Teknik Informatika")
- * @param {number} payload.mcq_accuracy - Akurasi jawaban MCQ siswa (0.0 s.d. 100.0)
- * @param {number} payload.essay_analytical_score - Rata-rata skor daya analitis esai (1.0 s.d. 5.0)
- * @param {number} payload.essay_interest_score - Rata-rata skor sinyal minat esai (1.0 s.d. 5.0)
- * @param {number} payload.total_trials_completed - Total studi kasus yang dikerjakan (min 0)
- * @param {number|null} [payload.user_satisfaction_rating] - Rating kepuasan subjektif siswa (1.0 s.d. 5.0, opsional)
- * @param {Object|null} [payload.profile] - Profil minat & nilai awal siswa dari onboarding (opsional)
- * @returns {Promise<{
- *   id: string,
- *   major_node_id: string,
- *   preview: string,
- *   matching_percentage: number,
- *   career_paths: Array<{ id: string, major_node_preview_id: string, title: string, detail: string }>
- * }>}
- */
-export async function getMajorPreview(majorNodeId, payload) {
-  try {
-    const response = await fetch(`${BASE_URL}/preview/${majorNodeId}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
-
-      if (response.status === 422) {
-        const errorMessages = errorData?.detail
-          ? errorData.detail.map((err) => `${err.loc.join('.')}: ${err.msg}`).join(', ')
-          : 'Format request pembuatan preview tidak valid.';
-        throw new Error(`Validasi Gagal: ${errorMessages}`);
-      }
-
-      const serverMessage = errorData?.detail || 'Terjadi kesalahan pada server saat membuat preview jurusan.';
-      throw new Error(`Error (${response.status}): ${serverMessage}`);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('Gagal mengambil preview jurusan:', error);
-    throw error;
-  }
-}
-```
-
----
-
-### 4.8. Komponen Modal Preview: `src/components/MajorPreviewModal.jsx`
-
-Komponen dialog modal interaktif untuk menampilkan rangkuman evaluasi keminatan AI setelah siswa menyelesaikan seluruh trial di suatu jurusan, lengkap dengan persentase kecocokan, narasi analisis, dan kartu rekomendasi karir masa depan:
-
-```jsx
-import React, { useState, useEffect } from 'react';
-import { getMajorPreview } from '../services/previewService';
-
-export default function MajorPreviewModal({
-  isOpen,
-  onClose,
-  major,
-  previewData,
-  trialsMetrics,
-  profile,
-  onSavePreview,
-  onGoToLeaderboard,
-}) {
-  const [preview, setPreview] = useState(previewData || null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
-
-  // Jika previewData belum ada, otomatis fetch dari backend menggunakan metrics
-  useEffect(() => {
-    if (!isOpen || preview || !major) return;
-
-    if (!trialsMetrics) {
-      setError('Metrik trial belum tersedia.');
-      return;
-    }
-
-    async function fetchPreview() {
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const result = await getMajorPreview(major.id, {
-          major_name: major.major_name,
-          mcq_accuracy: trialsMetrics.mcq_accuracy,
-          essay_analytical_score: trialsMetrics.essay_analytical_score,
-          essay_interest_score: trialsMetrics.essay_interest_score,
-          total_trials_completed: trialsMetrics.total_trials_completed,
-          user_satisfaction_rating: trialsMetrics.user_satisfaction_rating || null,
-          profile: profile || null,
-        });
-
-        setPreview(result);
-
-        // Teruskan ke parent agar tersimpan permanen di IndexedDB (Dexie.js)
-        if (onSavePreview) {
-          onSavePreview(result);
-        }
-      } catch (err) {
-        setError(err.message || 'Gagal menyusun preview evaluasi AI.');
-      } finally {
-        setIsLoading(false);
-      }
-    }
-
-    fetchPreview();
-  }, [isOpen, preview, major, trialsMetrics, profile, onSavePreview]);
-
-  if (!isOpen) return null;
-
-  const circleColor = major?.circle_color || '#4F46E5';
-
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000,
-        padding: 16,
-      }}
-      onClick={onClose}
-    >
-      <div
-        style={{
-          backgroundColor: '#FFFFFF',
-          borderRadius: 16,
-          maxWidth: 650,
-          width: '100%',
-          maxHeight: '90vh',
-          overflowY: 'auto',
-          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
-          padding: 24,
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header Modal */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid #E5E7EB', paddingBottom: 16 }}>
-          <div>
-            <span
-              style={{
-                display: 'inline-block',
-                backgroundColor: `${circleColor}15`,
-                color: circleColor,
-                fontWeight: 'bold',
-                fontSize: '0.75rem',
-                padding: '4px 10px',
-                borderRadius: 20,
-                marginBottom: 6,
-              }}
-            >
-              Rangkuman Trial Keminatan
-            </span>
-            <h2 style={{ margin: 0, fontSize: '1.4rem', color: '#111827' }}>
-              {major?.major_name}
-            </h2>
-          </div>
-          <button
-            onClick={onClose}
-            style={{
-              background: 'none',
-              border: 'none',
-              fontSize: '1.5rem',
-              cursor: 'pointer',
-              color: '#9CA3AF',
-              lineHeight: 1,
-            }}
-          >
-            &times;
-          </button>
-        </div>
-
-        {/* Loading State */}
-        {isLoading && (
-          <div style={{ padding: '40px 0', textAlign: 'center' }}>
-            <div style={{ fontSize: '2rem', marginBottom: 12 }}>✨</div>
-            <h4 style={{ margin: '0 0 6px 0', color: '#374151' }}>Menyusun Rangkuman AI...</h4>
-            <p style={{ margin: 0, color: '#6B7280', fontSize: '0.9rem' }}>
-              AI sedang menganalisis kecocokan responmu dan memetakan prospek karir masa depan.
-            </p>
-          </div>
-        )}
-
-        {/* Error State */}
-        {error && !isLoading && (
-          <div style={{ margin: '20px 0', padding: 14, backgroundColor: '#FEE2E2', borderRadius: 8, color: '#DC2626' }}>
-            <p style={{ margin: '0 0 8px 0', fontWeight: 'bold' }}>Gagal memuat rangkuman:</p>
-            <p style={{ margin: 0, fontSize: '0.9rem' }}>{error}</p>
-          </div>
-        )}
-
-        {/* Content Body */}
-        {preview && !isLoading && (
-          <div style={{ marginTop: 20 }}>
-            {/* Banner Persentase Kecocokan */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: 16,
-                borderRadius: 12,
-                backgroundColor: `${circleColor}10`,
-                border: `1px solid ${circleColor}30`,
-                marginBottom: 20,
-              }}
-            >
-              <div>
-                <span style={{ fontSize: '0.85rem', color: '#4B5563', fontWeight: 500 }}>
-                  Tingkat Kecocokan Jurusan
-                </span>
-                <h3 style={{ margin: '4px 0 0 0', color: circleColor, fontSize: '1.75rem' }}>
-                  {preview.matching_percentage}% Cocok
-                </h3>
-              </div>
-              <div
-                style={{
-                  width: 56,
-                  height: 56,
-                  borderRadius: '50%',
-                  backgroundColor: circleColor,
-                  color: '#FFFFFF',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: '1.4rem',
-                  fontWeight: 'bold',
-                }}
-              >
-                🎯
-              </div>
-            </div>
-
-            {/* Narasi Rangkuman Evaluasi AI */}
-            <div style={{ marginBottom: 24 }}>
-              <h4 style={{ margin: '0 0 8px 0', fontSize: '1rem', color: '#1F2937' }}>
-                💡 Analisis Potensi & Evaluasi:
-              </h4>
-              <p
-                style={{
-                  margin: 0,
-                  color: '#4B5563',
-                  lineHeight: 1.6,
-                  fontSize: '0.95rem',
-                  backgroundColor: '#F9FAFB',
-                  padding: 14,
-                  borderRadius: 10,
-                  borderLeft: `4px solid ${circleColor}`,
-                }}
-              >
-                {preview.preview}
-              </p>
-            </div>
-
-            {/* Kartu Rekomendasi Jalur Karir */}
-            {preview.career_paths && preview.career_paths.length > 0 && (
-              <div>
-                <h4 style={{ margin: '0 0 12px 0', fontSize: '1rem', color: '#1F2937' }}>
-                  🚀 Rekomendasi Jalur Karir Terkait:
-                </h4>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
-                  {preview.career_paths.map((cp) => (
-                    <div
-                      key={cp.id}
-                      style={{
-                        padding: 14,
-                        borderRadius: 10,
-                        border: '1px solid #E5E7EB',
-                        backgroundColor: '#FFFFFF',
-                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                      }}
-                    >
-                      <span
-                        style={{
-                          display: 'inline-block',
-                          backgroundColor: '#EEF2FF',
-                          color: '#4F46E5',
-                          fontSize: '0.75rem',
-                          fontWeight: 'bold',
-                          padding: '2px 8px',
-                          borderRadius: 6,
-                          marginBottom: 6,
-                        }}
-                      >
-                        Profesi
-                      </span>
-                      <h5 style={{ margin: '0 0 6px 0', fontSize: '1rem', color: '#111827' }}>
-                        {cp.title}
-                      </h5>
-                      <p style={{ margin: 0, fontSize: '0.85rem', color: '#6B7280', lineHeight: 1.4 }}>
-                        {cp.detail}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Footer Actions */}
-        <div
-          style={{
-            marginTop: 24,
-            paddingTop: 16,
-            borderTop: '1px solid #E5E7EB',
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: 12,
-          }}
-        >
-          <button
-            onClick={onClose}
-            style={{
-              padding: '10px 18px',
-              backgroundColor: '#F3F4F6',
-              color: '#374151',
-              border: 'none',
-              borderRadius: 8,
-              cursor: 'pointer',
-              fontWeight: 600,
-            }}
-          >
-            Tutup
-          </button>
-          {onGoToLeaderboard && (
-            <button
-              onClick={() => {
-                onClose();
-                onGoToLeaderboard();
-              }}
-              style={{
-                padding: '10px 20px',
-                backgroundColor: circleColor,
-                color: '#FFFFFF',
-                border: 'none',
-                borderRadius: 8,
-                cursor: 'pointer',
-                fontWeight: 600,
-              }}
-            >
-              Lihat Semua di Leaderboard 🏆
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-```
-

@@ -9,6 +9,13 @@ from .input import (
     SubjectsScore,
     normalize_subject_name,
 )
+from .knowledge_cluster import (
+    KnowledgeCluster,
+    KnowledgeClusterLLMItem,
+    KnowledgeClusterLLMResponse,
+    RecommendClustersResponse,
+    SSEClusterMessage,
+)
 from .major_node import MajorNode, MajorRecommendationLLMResponse
 from .minicase_node import (
     CoreSubjectsLLMResponse,
@@ -43,6 +50,11 @@ __all__ = [
     "normalize_subject_name",
     "MajorNode",
     "MajorRecommendationLLMResponse",
+    "KnowledgeCluster",
+    "KnowledgeClusterLLMItem",
+    "KnowledgeClusterLLMResponse",
+    "RecommendClustersResponse",
+    "SSEClusterMessage",
     "MinicaseNode",
     "GenerateMinicasesRequest",
     "MultipleChoiceLLMItem",

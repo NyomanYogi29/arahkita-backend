@@ -4,6 +4,7 @@ from openai import AsyncOpenAI
 from arahkita_backend.adapters.openrouter.parser import (
     format_core_subjects_user_prompt,
     format_essay_eval_user_prompt,
+    format_knowledge_cluster_user_prompt,
     format_minicases_user_prompt,
     format_preview_user_prompt,
     format_single_subject_user_prompt,
@@ -13,6 +14,7 @@ from arahkita_backend.adapters.openrouter.parser import (
 from arahkita_backend.adapters.openrouter.system_prompt import (
     CORE_SUBJECTS_SYSTEM_PROMPT,
     ESSAY_EVALUATION_SYSTEM_PROMPT,
+    KNOWLEDGE_CLUSTER_SYSTEM_PROMPT,
     MAJOR_RECOMMENDATION_SYSTEM_PROMPT,
     MINICASES_SYSTEM_PROMPT,
     PREVIEW_SYSTEM_PROMPT,
@@ -26,6 +28,10 @@ from arahkita_backend.schemas.essay_eval import (
     EssayEvaluationResult,
 )
 from arahkita_backend.schemas.input import InputKeminatan
+from arahkita_backend.schemas.knowledge_cluster import (
+    KnowledgeClusterLLMItem,
+    KnowledgeClusterLLMResponse,
+)
 from arahkita_backend.schemas.major_node import MajorRecommendationLLMResponse
 from arahkita_backend.schemas.minicase_node import (
     CoreSubjectsLLMResponse,
@@ -83,7 +89,53 @@ async def fetch_major_recommendations(
         raise ValueError(f"Gagal mem-parsing rekomendasi jurusan dari LLM: {exc}") from exc
 
     recommendations = [r.strip() for r in parsed.recommendations if r and r.strip()]
-    return recommendations[:6]
+    return recommendations[:5]
+
+
+async def fetch_knowledge_clusters(
+    majors: list[str],
+    settings: Settings,
+    profile: InputKeminatan | None = None,
+    client: AsyncOpenAI | None = None,
+) -> list[KnowledgeClusterLLMItem]:
+    """Mengirim request ke OpenRouter untuk mengelompokkan 5 jurusan ke dalam 1–5 rumpun keilmuan."""
+    ai_client = client or AsyncOpenAI(
+        base_url=settings.openrouter_base_url,
+        api_key=settings.openrouter_api_key,
+    )
+
+    user_content = format_knowledge_cluster_user_prompt(majors=majors, profile=profile)
+
+    response = await ai_client.chat.completions.create(
+        model=settings.openrouter_model,
+        messages=[
+            {"role": "system", "content": KNOWLEDGE_CLUSTER_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        response_format={"type": "json_object"},
+        max_tokens=1000,
+        extra_body={"reasoning": {"exclude": True}, "provider": {"sort": "throughput"}},
+    )
+
+    raw_content = response.choices[0].message.content
+    if not raw_content:
+        raise ValueError("OpenRouter mengembalikan respons kosong untuk knowledge clusters.")
+
+    cleaned_json = clean_json_response(raw_content)
+
+    try:
+        parsed = KnowledgeClusterLLMResponse.model_validate_json(cleaned_json)
+    except Exception as exc:
+        logger.error(
+            "Gagal melakukan parsing output LLM knowledge cluster: %s. Raw: %s",
+            exc,
+            raw_content,
+        )
+        raise ValueError(
+            f"Gagal mem-parsing knowledge cluster dari LLM: {exc}"
+        ) from exc
+
+    return parsed.clusters[:5]
 
 
 async def fetch_minicases_generation(
@@ -401,6 +453,7 @@ async def fetch_single_subject_trials(
 
 __all__ = [
     "fetch_major_recommendations",
+    "fetch_knowledge_clusters",
     "fetch_minicases_generation",
     "evaluate_essay_answer",
     "fetch_preview_generation",

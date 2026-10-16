@@ -1,142 +1,249 @@
-# 🧭 Dokumen Strategi Integrasi & Arsitektur Frontend ArahKita
+# 🧭 Panduan Integrasi Frontend: Changelog Backend & Implementasi Streaming SSE
 
-Dokumen ini adalah panduan teknis dan strategi integrasi antara **ArahKita Frontend** (React + Vite, Vanilla JavaScript, IndexedDB/Dexie.js) dan **ArahKita Backend** (Stateless AI Gateway).
-
-Dokumen ini memuat arsitektur *offline-first*, skema penyimpanan lokal browser, siklus hidup pengerjaan trial, serta **informasi perubahan arsitektur terbaru** (khususnya input mata pelajaran dinamis dan evaluasi kecocokan).
+Dokumen ini memuat catatan teknis seluruh pembaruan backend terbaru untuk tim Frontend (React + Vite, JavaScript, IndexedDB/Dexie.js), agar dapat langsung mengimplementasikan integrasi endpoint baru bersamaan dengan pembaruan backend.
 
 ---
 
-## 📌 Daftar Isi
-1. [Ringkasan Perubahan Terbaru (Changelog)](#1-ringkasan-perubahan-terbaru-changelog)
-2. [Prinsip Arsitektur (Stateless Backend + Offline-First Frontend)](#2-prinsip-arsitektur)
-3. [Desain Database Lokal: IndexedDB (Dexie.js)](#3-desain-database-lokal-indexeddb-dexiejs)
-4. [Alur Siklus Hidup & Sinkronisasi Data](#4-alur-siklus-hidup--sinkronisasi-data)
-5. [Implementasi Layanan & Helper Frontend](#5-implementasi-layanan--helper-frontend)
-   - [5.1. Setup Database Dexie (`src/db/index.js`)](#51-setup-database-dexie-srcdbindexjs)
-   - [5.2. Penyimpanan Profil Onboarding Dinamis](#52-penyimpanan-profil-onboarding-dinamis)
-   - [5.3. Pengerjaan Soal Pilihan Ganda (Offline-First)](#53-pengerjaan-soal-pilihan-ganda-offline-first)
-   - [5.4. Pengerjaan Soal Esai Reflektif (Real-time AI Evaluator)](#54-pengerjaan-soal-esai-reflektif-real-time-ai-evaluator)
-   - [5.5. Agregasi Metrik & Generate Preview Rangkuman](#55-agregasi-metrik--generate-preview-rangkuman)
-   - [5.6. Pengambilan Leaderboard Akhir](#56-pengambilan-leaderboard-akhir)
-6. [Formula Kalkulasi Persentase Kecocokan Backend](#6-formula-kalkulasi-persentase-kecocokan-backend)
+## ⚡ 1. Ringkasan Perubahan Backend Terbaru (Changelog)
+
+### 1.1. Endpoint Baru: Streaming Server-Sent Events (SSE)
+- **URL**: `POST /api/v1/minicases/generate-stream`
+- **Tujuan**: Mengatasi masalah layar *loading* kosong ~30–40 detik saat LLM men-generate pohon studi kasus.
+- **Header**: `Accept: text/event-stream`
+- **Cara Kerja**: Backend memancarkan status berpikir AI secara berkala (`type: "status"`), mengirimkan node soal individual begitu siap (`type: "node"`), dan memberikan sinyal selesai (`type: "done"`).
+
+### 1.2. Paralelisasi Generasi & Early Interaction (~5–7 Detik)
+- Backend kini memecah generasi studi kasus menjadi 2 tahap menggunakan `asyncio.gather`:
+  1. **Tahap 1**: Menentukan 3–5 mata kuliah dasar inti (~1–2 detik).
+  2. **Tahap 2 (Paralel)**: Merakit studi kasus (1 MCQ + 1 Esai) untuk masing-masing mata kuliah secara simultan.
+- **Keuntungan UX**: Mata kuliah pertama (**Node #2: Pilihan Ganda** dan **Node #3: Esai**) selesai dibuat dalam **~5–6 detik** dan langsung dikirim ke frontend. Siswa dapat langsung mulai membaca dan berinteraksi dengan soal pertama, sementara sisa node disimpan otomatis di latar belakang.
+
+### 1.3. Optimasi Routing Throughput OpenRouter
+- Seluruh pemanggilan OpenRouter di backend telah dikonfigurasi dengan `"provider": {"sort": "throughput"}` dan mematikan reasoning token yang tidak perlu, sehingga kecepatan token per detik meningkat signifikan.
+
+### 1.4. Input Nilai Mata Pelajaran Tetap Dinamis Penuh
+- Form onboarding menerima **minimal 3 dan maksimal 10 mata pelajaran** bebas dengan nilai integer `0–100`.
+- Backend otomatis menormalisasi semua nama mata pelajaran menjadi huruf kecil murni (*lowercase*).
+
+### 1.5. Penomoran Node & Aturan Rules
+- Node studi kasus dari backend memiliki `minicase_number` dimulai dari **2 hingga 11**.
+- Node **nomor 1** dialokasikan khusus untuk kartu panduan/aturan pengerjaan (*Rules Card*) yang dikelola langsung di state / IndexedDB lokal frontend.
 
 ---
 
-## 1. ⚡ Ringkasan Perubahan Terbaru (Changelog)
+## 📦 2. Kontrak Data Server-Sent Events (SSE)
 
-Bagi tim frontend, perhatikan pembaruan arsitektur berikut:
+Setiap baris data dikirim dalam format envelope JSON tunggal:
+```http
+data: {"type": "<status|node|done|error>", "data": <payload>}
 
-### 1.1. Input Mata Pelajaran Menjadi Dinamis Penuh
-- **Sebelumnya**: Field `nilai` mengharuskan 3 mata pelajaran kaku (`Matematika`, `IPA`, `Bahasa_Inggris`).
-- **Sekarang**: Siswa dapat menginput mata pelajaran peminatan apapun (misal `"Fisika"`, `"Kimia"`, `"Biologi"`, `"Sosiologi"`, `"Ekonomi"`, `"Geografi"`, `"Informatika"`, dsb.) sesuai kurikulum SMA/SMK mereka.
-- **Batasan Validasi**:
-  - **Minimal 3** dan **maksimal 10** mata pelajaran.
-  - Setiap mata pelajaran memiliki skor integer antara **0 hingga 100**.
-  - Tidak ada mata pelajaran wajib tertentu (siswa memilih mapel yang paling mereka percaya diri).
-- **Normalisasi Lowercase Otomatis**:
-  - Backend otomatis mengubah seluruh nama mapel menjadi huruf kecil murni (*lowercase*) dan memotong spasi (`key.strip().lower()`), misal `"Fisika"` $\to$ `"fisika"`, `"  KIMIA  "` $\to$ `"kimia"`.
-  - Duplikasi nama mapel setelah normalisasi (misal `"Fisika"` dan `"fisika"` dikirim bersamaan) akan ditolak validasi.
-
-### 1.2. Relevansi Mata Pelajaran pada Leaderboard Mengikuti Input Dinamis
-- Endpoint `POST /api/v1/recommendation-results` mengekstrak kandidat mata pelajaran relevan langsung dari daftar nilai dinamis yang siswa kirimkan di `profile.nilai`.
-- Properti `subject_name` pada badge `subject_relevances` dikembalikan dalam bentuk **lowercase** murni (contoh: `"fisika"`, `"biologi"`). Frontend dapat mengatur format visual tampilan (misal menggunakan CSS `text-transform: capitalize`).
-- Dibatasi minimal 1 hingga maksimal 3 mata pelajaran paling relevan per jurusan.
-
-### 1.3. Penomoran Node Trial Dimulai dari Nomor 2
-- Nomor urut node minicase dari backend (`minicase_number`) dimulai dari **2 hingga 11**.
-- Nomor **1** dialokasikan khusus untuk panduan pengerjaan (*Rules Pengerjaan*) yang dikelola langsung oleh frontend di state lokal.
-
-### 1.4. Path Parameter Endpoint Preview
-- Endpoint preview jurusan menggunakan path parameter: `POST /api/v1/preview/{major_node_id}`.
-
----
-
-## 2. 🧠 Prinsip Arsitektur
-
-```text
-┌──────────────────────────────────────────────┐
-│        Frontend (React + Vite, Offline)      │
-│  - Form Onboarding (Dinamis 3-10 Mapel)       │
-│  - Local Rules Card (Node #1)                │
-│  - IndexedDB (Dexie.js) Local Storage        │
-│  - Instant MCQ Evaluation (Offline)          │
-│  - Metrik Agregasi Lokal                     │
-└──────────────────────┬───────────────────────┘
-                       │ HTTP / JSON (HTTPS)
-                       ▼
-┌──────────────────────────────────────────────┐
-│        Backend (Stateless AI Gateway)        │
-│  - Rekomendasi Jurusan Awal (LLM)            │
-│  - Generator Soal Trial (Pohon Node 2-11)    │
-│  - AI Evaluator Esai Reflektif (1-5 Skor)    │
-│  - Generator Preview Naratif & Karir Realistis│
-│  - Leaderboard Sorter + Subject Relevances   │
-└──────────────────────────────────────────────┘
 ```
 
-1. **Stateless Backend**:
-   - Backend tidak menyimpan database pengguna atau state pengerjaan di server.
-   - Bertindak murni sebagai **AI Processing & Scoring Gateway**.
-2. **Offline-First Frontend**:
-   - Seluruh status progres (`is_done`, pilihan jawaban, hasil evaluasi esai sementara) disimpan di **IndexedDB browser** menggunakan wrapper [Dexie.js](https://dexie.org/).
-   - Siswa dapat keluar dari aplikasi, menutup tab browser, atau berganti halaman tanpa kehilangan progres pengerjaan trial.
+### Daftar Tipe Event:
+
+| `type` | Isi `data` | Kapan Dikirim & Kegunaan di Frontend |
+| :--- | :--- | :--- |
+| `"status"` | `{"stage": string, "message": string, "progress": number, "subjects"?: string[]}` | Dikirim saat AI sedang menganalisis kurikulum & membuat kasus. Gunakan untuk memperbarui **progress bar** atau **teks animasi berpikir**. |
+| `"node"` | Objek `MinicaseNode` lengkap | Dikirim tiap kali satu node soal selesai dirakit. Simpan langsung ke database lokal: `await db.minicases.put(event.data)` dan render node ke pohon visual. |
+| `"done"` | `{"total_nodes": number, "status": "completed", "message": string}` | Dikirim saat seluruh batch selesai. Matikan mode loading pada UI. |
+| `"error"` | `{"message": string}` | Dikirim jika terjadi kendala kritis. Tampilkan pesan kesalahan atau tombol coba lagi. |
 
 ---
 
-## 3. 🗄️ Desain Database Lokal: IndexedDB (Dexie.js)
+## 💻 3. Kode Implementasi Frontend Siap Pakai
 
-Gunakan 4 Object Store utama pada database lokal `ArahKitaDB`:
+### 3.1. Service Layer (`src/services/minicaseService.js`)
 
-| Object Store | Primary Key | Indeks Kunci | Keterangan & Isi Data |
-| :--- | :--- | :--- | :--- |
-| `profile` | `++id` *(auto)* | - | Menyimpan input minat & nilai rapor awal siswa dari onboarding (berisi mapel dinamis). |
-| `majors` | `id` *(UUID)* | `major_name` | Menyimpan daftar rekomendasi jurusan (`MajorNode`). |
-| `minicases` | `id` *(UUID)* | `parent_id, minicase_number, is_done, node_type` | Rantai soal studi kasus trial beserta jawaban & status pengerjaan siswa. |
-| `previews` | `id` *(UUID)* | `major_node_id, matching_percentage` | Rangkuman evaluasi AI, persentase kecocokan, dan kartu karir tiap jurusan yang telah selesai. |
+Tambahkan fungsi pembaca stream berikut menggunakan standard `fetch` dan `ReadableStream`:
 
----
+```javascript
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://api.nyomanyogi.my.id/api/v1';
 
-## 4. 🔄 Alur Siklus Hidup & Sinkronisasi Data
+/**
+ * Melakukan streaming generasi rantai minicase via Server-Sent Events (SSE).
+ * 
+ * @param {Object} payload - GenerateMinicasesRequest { major_id, major_name, circle_color, profile }
+ * @param {Object} callbacks
+ * @param {Function} callbacks.onStatus - Menerima update progres { stage, message, progress }
+ * @param {Function} callbacks.onNode - Menerima objek MinicaseNode individual
+ * @param {Function} callbacks.onDone - Dipanggil saat seluruh generasi selesai { total_nodes, status }
+ * @param {Function} callbacks.onError - Dipanggil jika terjadi kesalahan { message }
+ */
+export async function streamMinicasesTree(payload, { onStatus, onNode, onDone, onError }) {
+  try {
+    const response = await fetch(`${BASE_URL}/minicases/generate-stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+      },
+      body: JSON.stringify(payload),
+    });
 
-```mermaid
-flowchart TD
-    A["1. Onboarding Survey (3-10 Mapel)"] -->|POST /api/v1/majors/recommend| B["Simpan profile & majors di IndexedDB"]
-    B --> C["2. Siswa Memilih 1 Jurusan"]
-    C -->|POST /api/v1/minicases/generate| D["Simpan minicases (Nomor 2 s.d. 11) di IndexedDB"]
-    D --> E["3. Tampilkan Node #1: Rules Pengerjaan (Lokal)"]
-    E --> F{"4. Pengerjaan Soal (Node #2 s.d. #11)"}
-    
-    F -->|Node Multiple Choice| G["Evaluasi Lokal Instan\n(user_answer == correct_answer)\nUpdate minicase di IndexedDB"]
-    F -->|Node Essay| H["POST /api/v1/minicases/evaluate-essay\nSimpan skor analitis & minat di IndexedDB"]
-    
-    G --> I{"Semua Trial Selesai?"}
-    H --> I
-    I -->|Belum| F
-    I -->|Ya| J["5. Agregasi Metrik Performa Lokal\n(calculateMajorMetrics)"]
-    
-    J -->|POST /api/v1/preview/{major_id}| K["Terima MajorNodePreview & Karir\nSimpan ke store previews di IndexedDB"]
-    K --> L["6. Buka Halaman Leaderboard"]
-    L -->|POST /api/v1/recommendation-results| M["Leaderboard Terurut + Badge Mapel Relevan"]
+    if (!response.ok) {
+      throw new Error(`Gagal menghubungi server (Status: ${response.status})`);
+    }
+
+    if (!response.body) {
+      throw new Error('Response body tidak mendukung streaming');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split('\n\n');
+      buffer = chunks.pop() || '';
+
+      for (const chunk of chunks) {
+        const line = chunk.trim();
+        if (!line.startsWith('data: ')) continue;
+
+        try {
+          const event = JSON.parse(line.slice(6));
+          switch (event.type) {
+            case 'status':
+              onStatus?.(event.data);
+              break;
+            case 'node':
+              onNode?.(event.data);
+              break;
+            case 'done':
+              onDone?.(event.data);
+              break;
+            case 'error':
+              onError?.(event.data);
+              break;
+            default:
+              console.warn('Unknown event type received:', event);
+          }
+        } catch (parseErr) {
+          console.error('Gagal mem-parsing chunk SSE:', line, parseErr);
+        }
+      }
+    }
+  } catch (err) {
+    onError?.({ message: err.message || 'Terjadi gangguan jaringan saat streaming.' });
+    throw err;
+  }
+}
 ```
 
 ---
 
-## 5. 💻 Implementasi Layanan & Helper Frontend
+### 3.2. Pola Integrasi Komponen & Penyimpanan Dexie.js
 
-### 5.1. Setup Database Dexie (`src/db/index.js`)
+Saat pengguna memilih salah satu jurusan rekomendasi, panggil fungsi streaming ini:
 
-Instalasi dependency di frontend:
-```bash
-npm install dexie
+```javascript
+import React, { useState } from 'react';
+import { db } from '../db';
+import { streamMinicasesTree } from '../services/minicaseService';
+
+export function MajorTrialExplorer({ selectedMajor, userProfile }) {
+  const [loading, setLoading] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [progress, setProgress] = useState(0);
+  const [nodes, setNodes] = useState([]);
+
+  const handleStartExploration = async () => {
+    setLoading(true);
+    setProgress(5);
+    setStatusMessage('Menghubungkan ke konsultan AI...');
+
+    // 1. Simpan Rules Card (Node #1) ke database lokal jika belum ada
+    const rulesNode = {
+      id: `rules-${selectedMajor.id}`,
+      parent_id: selectedMajor.id,
+      minicase_number: 1,
+      minicase_title: 'Panduan Ujian',
+      subject_name: 'Aturan Pengerjaan',
+      node_type: 'rules',
+      question: 'Kerjakan soal pilihan ganda dan esai reflektif dengan jujur.',
+      is_parent: true,
+      circle_color: selectedMajor.circle_color,
+      is_done: true,
+      child_id: null, // akan diupdate saat node #2 tiba
+    };
+    await db.minicases.put(rulesNode);
+
+    // 2. Jalankan streaming SSE
+    await streamMinicasesTree(
+      {
+        major_id: selectedMajor.id,
+        major_name: selectedMajor.major_name,
+        circle_color: selectedMajor.circle_color,
+        profile: userProfile,
+      },
+      {
+        onStatus: (statusData) => {
+          setStatusMessage(statusData.message);
+          setProgress(statusData.progress);
+        },
+        onNode: async (nodeData) => {
+          // Simpan node secara idempoten ke IndexedDB browser
+          await db.minicases.put(nodeData);
+
+          // Hubungkan child_id dari node rules jika ini adalah node pertama (#2)
+          if (nodeData.minicase_number === 2) {
+            await db.minicases.update(rulesNode.id, { child_id: nodeData.id });
+          }
+
+          // Perbarui state UI agar node baru langsung muncul di visual tree
+          setNodes((prev) => [...prev, nodeData]);
+        },
+        onDone: (doneData) => {
+          setLoading(false);
+          setProgress(100);
+          setStatusMessage(doneData.message);
+        },
+        onError: (errData) => {
+          setLoading(false);
+          alert(`Gagal membuat studi kasus: ${errData.message}`);
+        },
+      }
+    );
+  };
+
+  return (
+    <div className="explorer-container">
+      {loading && (
+        <div className="ai-loading-bar">
+          <div className="progress-fill" style={{ width: `${progress}%` }} />
+          <p className="status-text">{statusMessage} ({progress}%)</p>
+        </div>
+      )}
+
+      {/* Tampilan Visual Tree Node */}
+      <div className="nodes-tree">
+        {nodes.map((node) => (
+          <div key={node.id} className="tree-node-card" style={{ borderColor: node.circle_color }}>
+            <h4>#{node.minicase_number} {node.minicase_title}</h4>
+            <p>{node.subject_name} • {node.node_type}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 ```
 
-Inisialisasi database:
+---
+
+## 🗄️ 4. Struktur Database Lokal (Dexie.js)
+
+Skema database IndexedDB lokal `ArahKitaDB` **tidak mengalami perubahan struktur**. Seluruh properti `MinicaseNode` kompatibel 100%:
+
 ```javascript
 import Dexie from 'dexie';
 
 export const db = new Dexie('ArahKitaDB');
 
-// Definisikan skema dan indeks
 db.version(1).stores({
   profile: '++id',
   majors: 'id, major_name',
@@ -145,218 +252,13 @@ db.version(1).stores({
 });
 ```
 
----
-
-### 5.2. Penyimpanan Profil Onboarding Dinamis
-
-Saat siswa mengirimkan survei minat dan daftar nilai mata pelajaran:
-
-```javascript
-import { db } from './db';
-import { getMajorRecommendations } from './services/majorService';
-
-export async function handleOnboardingSubmit(minatText, subjectList) {
-  // 1. Bentuk key-value dictionary untuk field nilai
-  // Contoh subjectList: [{ name: "Matematika", score: 85 }, { name: "Fisika", score: 80 }, { name: "Kimia", score: 90 }]
-  const nilaiDict = {};
-  for (const item of subjectList) {
-    if (item.name.trim()) {
-      nilaiDict[item.name.trim()] = Number(item.score);
-    }
-  }
-
-  const payload = {
-    minat: minatText.trim(),
-    nilai: nilaiDict,
-  };
-
-  // 2. Request rekomendasi jurusan ke backend
-  const majors = await getMajorRecommendations(payload);
-
-  // 3. Simpan profil & jurusan ke IndexedDB lokal
-  await db.transaction('rw', db.profile, db.majors, async () => {
-    await db.profile.clear();
-    await db.profile.add(payload);
-
-    await db.majors.clear();
-    await db.majors.bulkAdd(majors);
-  });
-
-  return majors;
-}
-```
+> 💡 **Keuntungan Operasi `put()`**: Operasi `db.minicases.put(event.data)` bersifat *upsert* (insert jika belum ada, replace jika ID sama). Jika node penutup disesuaikan di akhir stream oleh backend, pemanggilan `put` akan memperbarui record secara mulus.
 
 ---
 
-### 5.3. Pengerjaan Soal Pilihan Ganda (Offline-First)
+## 🔄 5. Kompatibilitas Endpoint Lama (Fallback)
 
-Karena kunci jawaban (`correct_answer`) sudah tersedia di objek `MinicaseNode`, evaluasi soal pilihan ganda berjalan secara **instan dan offline** tanpa melakukan panggilan jaringan:
-
-```javascript
-import { db } from './db';
-
-export async function submitMultipleChoiceAnswer(minicaseId, selectedOption) {
-  const node = await db.minicases.get(minicaseId);
-  if (!node) throw new Error('Node trial tidak ditemukan.');
-
-  const isCorrect = selectedOption.trim() === node.correct_answer.trim();
-
-  // Update status lokal di IndexedDB
-  await db.minicases.update(minicaseId, {
-    user_answer: selectedOption,
-    is_correct: isCorrect,
-    is_done: true,
-    updated_at: new Date().toISOString(),
-  });
-
-  return { isCorrect };
-}
-```
-
----
-
-### 5.4. Pengerjaan Soal Esai Reflektif (Real-time AI Evaluator)
-
-Teks jawaban esai siswa dikirimkan ke endpoint evaluasi esai backend untuk mendapatkan skor psikometrik:
-
-```javascript
-import { db } from './db';
-import { evaluateEssayAnswer } from './services/minicaseService';
-
-export async function submitEssayAnswer(node, userText) {
-  // 1. Evaluasi real-time via AI backend
-  const evalResult = await evaluateEssayAnswer({
-    question: node.question,
-    evaluation_hint: node.evaluation_hint,
-    user_answer: userText.trim(),
-    minicase_id: node.id,
-  });
-  // evalResult: { analytical_fit: 4, interest_signal: 5, is_serious_attempt: true }
-
-  // 2. Simpan skor & status ke IndexedDB lokal
-  await db.minicases.update(node.id, {
-    user_answer: userText.trim(),
-    analytical_fit: evalResult.analytical_fit,
-    interest_signal: evalResult.interest_signal,
-    is_serious_attempt: evalResult.is_serious_attempt,
-    is_done: true,
-    updated_at: new Date().toISOString(),
-  });
-
-  return evalResult;
-}
-```
-
----
-
-### 5.5. Agregasi Metrik & Generate Preview Rangkuman
-
-Ketika semua node trial pada suatu jurusan telah selesai dikerjakan (`is_done === true`), frontend menghitung rekapitulasi performa lokal dan memanggil endpoint preview:
-
-```javascript
-import { db } from './db';
-import { getMajorPreview } from './services/previewService';
-
-/**
- * Menghitung metrik agregat dari trial yang telah diselesaikan di IndexedDB.
- */
-export async function calculateMajorMetrics(majorId) {
-  const nodes = await db.minicases.where({ parent_id: majorId, is_done: true }).toArray();
-
-  const mcqNodes = nodes.filter((n) => n.node_type === 'multiple_choice');
-  const essayNodes = nodes.filter((n) => n.node_type === 'essay');
-
-  // 1. Akurasi MCQ (0 - 100%)
-  const correctCount = mcqNodes.filter((n) => n.is_correct === true).length;
-  const mcqAccuracy = mcqNodes.length > 0 ? (correctCount / mcqNodes.length) * 100 : 0;
-
-  // 2. Rata-rata Skor Daya Analitis Esai (skala 1.0 - 5.0)
-  const totalAnalytical = essayNodes.reduce((sum, n) => sum + (n.analytical_fit || 1), 0);
-  const avgAnalytical = essayNodes.length > 0 ? totalAnalytical / essayNodes.length : 3.0;
-
-  // 3. Rata-rata Skor Sinyal Minat Esai (skala 1.0 - 5.0)
-  const totalInterest = essayNodes.reduce((sum, n) => sum + (n.interest_signal || 1), 0);
-  const avgInterest = essayNodes.length > 0 ? totalInterest / essayNodes.length : 3.0;
-
-  return {
-    mcq_accuracy: Number(mcqAccuracy.toFixed(1)),
-    essay_analytical_score: Number(avgAnalytical.toFixed(2)),
-    essay_interest_score: Number(avgInterest.toFixed(2)),
-    total_trials_completed: nodes.length,
-  };
-}
-
-/**
- * Sinkronisasi metrik ke backend untuk mendapatkan teks preview & rekomendasi karir.
- */
-export async function generateAndSavePreview(major, userRating = null) {
-  const metrics = await calculateMajorMetrics(major.id);
-  const profileRecord = await db.profile.toCollection().first();
-
-  const payload = {
-    major_name: major.major_name,
-    mcq_accuracy: metrics.mcq_accuracy,
-    essay_analytical_score: metrics.essay_analytical_score,
-    essay_interest_score: metrics.essay_interest_score,
-    total_trials_completed: metrics.total_trials_completed,
-    user_satisfaction_rating: userRating,
-    profile: profileRecord || null,
-  };
-
-  // Panggil endpoint: POST /api/v1/preview/{major_id}
-  const previewData = await getMajorPreview(major.id, payload);
-
-  // Simpan hasil preview ke IndexedDB
-  await db.previews.put({
-    ...previewData,
-    major_node_id: major.id,
-  });
-
-  return previewData;
-}
-```
-
----
-
-### 5.6. Pengambilan Leaderboard Akhir
-
-Saat membuka halaman Leaderboard, frontend mengambil data dari IndexedDB lokal dan mengirimkannya ke `POST /api/v1/recommendation-results`:
-
-```javascript
-import { db } from './db';
-import { getRecommendationResults } from './services/recommendationService';
-
-export async function fetchLeaderboardFromLocal() {
-  const [majorNodes, previews, profile] = await Promise.all([
-    db.majors.toArray(),
-    db.previews.toArray(),
-    db.profile.toCollection().first(),
-  ]);
-
-  const results = await getRecommendationResults({
-    major_nodes: majorNodes,
-    previews: previews,
-    profile: profile || null,
-  });
-
-  return results;
-}
-```
-
----
-
-## 6. 📐 Formula Kalkulasi Persentase Kecocokan Backend
-
-Backend menghitung persentase kecocokan keminatan menggunakan bobot terukur (*deterministic weighted scoring*):
-
-$$\text{Matching \%} = \text{round}\left( 0.30 \times \text{MCQ} + 0.35 \times \left(\frac{\text{Analitis}}{5} \times 100\right) + 0.35 \times \left(\frac{\text{Minat}}{5} \times 100\right) \right)$$
-
-### Rincian Pembobotan:
-1. **30% Akurasi MCQ (`mcq_accuracy`)**:
-   - Menguji penguasaan konsep dasar dan pemahaman awal materi pengantar jurusan.
-2. **35% Kemampuan Analitis Esai (`essay_analytical_score`)**:
-   - Menguji logika pemecahan masalah (*problem-solving*), penalaran kritis, dan struktur penyelesaian kasus.
-3. **35% Sinyal Minat Esai (`essay_interest_score`)**:
-   - Menguji antusiasme, rasa ingin tahu intelektual, dan resiliensi siswa dalam menghadapi tantangan studi kasus.
-4. **Batas Nilai Akhir (*Clamping*)**:
-   - Nilai dibulatkan ke bilangan bulat terdekat dan di-*clamp* secara aman pada rentang **`1%` s.d. `100%`**.
+Endpoint non-streaming lama **`POST /api/v1/minicases/generate`** tetap aktif:
+- Mengembalikan response `list[MinicaseNode]` sekaligus dalam bentuk array JSON standar (`200 OK`).
+- Di backend, endpoint lama ini juga **telah dipercepat** menggunakan paralelisasi internal yang sama (~6–8 detik).
+- Jika ada kendala koneksi streaming pada browser pengguna tertentu, frontend dapat menggunakan endpoint lama ini sebagai mekanisme *graceful fallback*.

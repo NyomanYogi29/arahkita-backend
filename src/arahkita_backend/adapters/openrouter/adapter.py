@@ -3,6 +3,7 @@ from openai import AsyncOpenAI
 from arahkita_backend.adapters.openrouter.entry import (
     evaluate_essay_answer,
     fetch_core_subjects,
+    fetch_knowledge_clusters,
     fetch_major_recommendations,
     fetch_minicases_generation,
     fetch_preview_generation,
@@ -15,6 +16,7 @@ from arahkita_backend.schemas.essay_eval import (
     EssayEvaluationResult,
 )
 from arahkita_backend.schemas.input import InputKeminatan
+from arahkita_backend.schemas.knowledge_cluster import KnowledgeClusterLLMItem
 from arahkita_backend.schemas.minicase_node import (
     GenerateMinicasesRequest,
     SubjectTrialLLMItem,
@@ -40,6 +42,17 @@ class OpenRouterAdapter:
         return await fetch_major_recommendations(
             profile=profile,
             settings=self.settings,
+            client=self.client,
+        )
+
+    async def fetch_knowledge_clusters(
+        self, majors: list[str], profile: InputKeminatan | None = None
+    ) -> list[KnowledgeClusterLLMItem]:
+        """Mengelompokkan 5 nama jurusan ke dalam 1–5 rumpun keilmuan."""
+        return await fetch_knowledge_clusters(
+            majors=majors,
+            settings=self.settings,
+            profile=profile,
             client=self.client,
         )
 
