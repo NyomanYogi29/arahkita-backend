@@ -1,8 +1,10 @@
 from .major_service import get_major_recommendations
 from .minicase_service import (
+    assemble_nodes_from_subjects,
     evaluate_student_essay,
     generate_minicases_tree,
     sanitize_title,
+    stream_minicases_tree,
 )
 from .preview_service import (
     calculate_matching_percentage,
@@ -16,6 +18,8 @@ from .recommendation_result_service import calculate_recommendation_leaderboard
 __all__ = [
     "get_major_recommendations",
     "generate_minicases_tree",
+    "stream_minicases_tree",
+    "assemble_nodes_from_subjects",
     "evaluate_student_essay",
     "sanitize_title",
     "calculate_matching_percentage",

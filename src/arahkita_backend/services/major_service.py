@@ -1,4 +1,4 @@
-from arahkita_backend.adapters.openrouter_adapter import OpenRouterAdapter
+from arahkita_backend.adapters.openrouter import OpenRouterAdapter
 from arahkita_backend.schemas.input import InputKeminatan
 from arahkita_backend.schemas.major_node import MajorNode
 from arahkita_backend.utils.colors import pick_circle_color

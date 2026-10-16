@@ -11,11 +11,14 @@ from .input import (
 )
 from .major_node import MajorNode, MajorRecommendationLLMResponse
 from .minicase_node import (
+    CoreSubjectsLLMResponse,
     EssayLLMItem,
     GenerateMinicasesRequest,
     MinicaseNode,
     MinicasesGenerationLLMResponse,
     MultipleChoiceLLMItem,
+    SingleSubjectTrialLLMResponse,
+    SSEMinicaseMessage,
     SubjectTrialLLMItem,
 )
 from .preview import (
@@ -46,6 +49,9 @@ __all__ = [
     "EssayLLMItem",
     "SubjectTrialLLMItem",
     "MinicasesGenerationLLMResponse",
+    "CoreSubjectsLLMResponse",
+    "SingleSubjectTrialLLMResponse",
+    "SSEMinicaseMessage",
     "EssayEvaluationRequest",
     "EssayEvaluationResult",
     "EssayEvaluationLLMResponse",

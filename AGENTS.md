@@ -83,14 +83,20 @@ arahkita-backend/
     │   └── major_node.py           # Schema output: MajorNode, LLM response wrappers
     ├── adapters/
     │   ├── __init__.py
-    │   └── openrouter_adapter.py   # Komunikasi OpenAI SDK ke OpenRouter
+    │   └── openrouter/
+    │       ├── __init__.py         # Re-export openrouter module
+    │       ├── adapter.py          # Kelas OpenRouterAdapter
+    │       ├── entry.py            # Fungsi pemanggilan I/O OpenRouter API
+    │       ├── parser.py           # Pemformat user prompt LLM
+    │       └── system_prompt.py    # Konstanta system prompt LLM
     ├── services/
     │   ├── __init__.py
     │   └── major_service.py        # Logika perakitan node & rekomendasi jurusan
     ├── utils/
     │   ├── __init__.py
     │   ├── colors.py               # Palet kurasi warna hex ramah mata & selector
-    │   └── ids.py                  # Generator UUID v4
+    │   ├── ids.py                  # Generator UUID v4
+    │   └── parser.py               # Pembersih respon markdown JSON
     └── api/
         ├── __init__.py
         └── v1/
